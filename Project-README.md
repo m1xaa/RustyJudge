@@ -19,7 +19,7 @@ and then applies a set of simple linting rules that operate directly on the AST.
     - Read JS source file
     - Parse the code into an AST using the JS parser
     - Build a context object(file name, AST root, ...)
-    - Runa  set of **lint rules** over the AST
+    - Run a set of **lint rules** over the AST
     - Collect the diagnostics and print them via CLI
 
 - Code structure
@@ -93,7 +93,7 @@ All rules below work with the AST by implementing some kind of *visitor*.
 
 The basic usage of this tool would be through the CLI.  
 Below are listed possible usage options:
-- `rustyjudge lint <files...>` - main command to run linting (must specify at least one file)
-- `rustyjudge lint [dir]/*` - lint all JS files inside the *[dir]*
-- `rustyjudge lint <files...> --max-line-length 120` - overrides the *max-line-length* rule
+- `rusty_judge <files...>` - main command to run linting (must specify at least one file)
+- `rusty_judge [dir]/*` - lint all JS files inside the *[dir]*
+- `rusty_judge <files...> --max-line-length 120` - overrides the *max-line-length* rule
  
