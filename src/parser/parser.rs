@@ -3,7 +3,7 @@ use rslint_parser::{parse_text, Parse, SyntaxNode};
 
 use crate::parser::error::ParseError;
 
-pub fn parse_js_file(path: &Path) -> Result<Parse<SyntaxNode>, ParseError> {
+pub fn parse_js_file(path: &Path) -> Result<(SyntaxNode, String), ParseError> {
     let source = fs::read_to_string(path)?;
     let parse = parse_text(&source, 0).to_syntax();
 
@@ -11,5 +11,5 @@ pub fn parse_js_file(path: &Path) -> Result<Parse<SyntaxNode>, ParseError> {
         return Err(ParseError::Syntax(err.clone()));
     }
 
-    Ok(parse)
+    Ok((parse.syntax(), source))
 }

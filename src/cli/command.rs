@@ -31,7 +31,7 @@ impl CliCommands {
 
 #[derive(Debug)]
 pub struct Command {
-    file_path: PathBuf
+    pub file_path: PathBuf
 }
 
 #[derive(Debug)]
