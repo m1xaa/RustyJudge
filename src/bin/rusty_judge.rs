@@ -1,5 +1,5 @@
 
-use rusty_judge::{parse_cli, parse_js_file, RuleContext, NoVar, Rule, NoUnusedVars, StrictEquality};
+use rusty_judge::{parse_cli, parse_js_file, RuleContext, NoVar, Rule, StrictEquality, NoConsoleLog};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli_commands = parse_cli()?;
@@ -7,11 +7,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .iter()
         .for_each(|command| {
             let (ast, source) = parse_js_file(&command.file_path).expect("Failed to parse file");
-            let context = RuleContext::new(ast, source);
-            //println!("{:#?}", &context.root);
-            println!("No var: {}" ,NoVar.check(&context));
-            println!("No unused vars: {}", NoUnusedVars.check(&context));
-            println!("Strict equality: {}", StrictEquality.check(&context));
+            let context = RuleContext::new(ast, source, cli_commands.overridden_rules.max_line_length);
+            println!("{:#?}", &context.root);
+            println!("no empty block: {}" , rusty_judge::NoEmptyBlock.check(&context));
         }
         );
 

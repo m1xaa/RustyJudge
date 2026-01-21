@@ -9,11 +9,12 @@ pub trait Rule {
 
 pub struct RuleContext {
     pub root: SyntaxNode,
-    pub source: String
+    pub source: String,
+    pub max_line_length: usize,
 }
 
 impl RuleContext {
-    pub fn new(root: SyntaxNode, source: String) -> Self {
-        RuleContext { root, source }
+    pub fn new(root: SyntaxNode, source: String, max_line_length: usize) -> Self {
+        RuleContext { root, source, max_line_length }
     }
 }
