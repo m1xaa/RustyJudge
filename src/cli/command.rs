@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 #[derive(Debug)]
 pub struct CliCommands {
     commands: Vec<Command>,
-    overridden_rules: RuleOverrides
+    pub overridden_rules: RuleOverrides
 }
 
 impl CliCommands {
@@ -31,12 +31,12 @@ impl CliCommands {
 
 #[derive(Debug)]
 pub struct Command {
-    file_path: PathBuf
+    pub file_path: PathBuf
 }
 
 #[derive(Debug)]
 pub struct RuleOverrides {
-    max_line_length: usize,
+    pub max_line_length: usize,
 }
 
 impl Default for RuleOverrides {
