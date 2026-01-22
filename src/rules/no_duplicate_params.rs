@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use rslint_parser::{SyntaxKind, SyntaxNodeExt};
 use crate::{Rule, RuleContext};
+use crate::diagnostics::Diagnostic;
 
 pub struct NoDuplicateParams;
 
@@ -9,27 +10,37 @@ impl Rule for NoDuplicateParams {
         "no-duplicate-params"
     }
 
-    fn check(&self, rule_context: &RuleContext) -> bool {
-        for node in rule_context.root.descendants() {
-            if node.kind() != SyntaxKind::PARAMETER_LIST {
+    fn check(&self, ctx: &RuleContext) -> Vec<Diagnostic> {
+        let mut diagnostics = Vec::new();
+
+        for param_list in ctx.root.descendants() {
+            if param_list.kind() != SyntaxKind::PARAMETER_LIST {
                 continue;
             }
 
-            let mut param_set: HashSet<String> = HashSet::new();
+            let mut seen: HashSet<String> = HashSet::new();
 
-            for token in node.tokens() {
+            for token in param_list.tokens() {
                 if token.kind() != SyntaxKind::IDENT {
                     continue;
                 }
 
                 let name = token.text().to_string();
 
-                if !param_set.insert(name) {
-                    return true;
+                if !seen.insert(name.clone()) {
+                    diagnostics.push(
+                        ctx.diagnostic_at(
+                            token.text_range(),
+                            format!(
+                                "Duplicate parameter name '{}' in function declaration",
+                                name
+                            ),
+                        )
+                    );
                 }
             }
         }
 
-        false
+        diagnostics
     }
 }

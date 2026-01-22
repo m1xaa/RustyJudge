@@ -1,5 +1,6 @@
 use rslint_parser::{SyntaxKind, SyntaxNode, SyntaxNodeExt};
 use crate::{Rule, RuleContext};
+use crate::diagnostics::Diagnostic;
 
 pub struct NoEmptyBlock;
 
@@ -8,7 +9,9 @@ impl Rule for NoEmptyBlock {
         "no-empty-block"
     }
 
-    fn check(&self, rule_context: &RuleContext) -> bool {
+    fn check(&self, rule_context: &RuleContext) -> Vec<Diagnostic> {
+        let mut diagnostics = vec![];
+
         for node in rule_context.root.descendants() {
             if node.kind() != SyntaxKind::BLOCK_STMT {
                 continue;
@@ -30,12 +33,13 @@ impl Rule for NoEmptyBlock {
                 }
             };
 
-            if next.kind() == SyntaxKind::R_CURLY {
-                return true;
+            if next.kind() != SyntaxKind::R_CURLY {
+                continue;
             }
 
+            diagnostics.push(rule_context.diagnostic_at(l_curly.text_range(), "Empty block of code"))
         }
 
-        false
+        diagnostics
     }
 }

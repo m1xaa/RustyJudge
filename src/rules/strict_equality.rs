@@ -1,5 +1,6 @@
 use rslint_parser::SyntaxKind;
 use crate::{Rule, RuleContext};
+use crate::diagnostics::Diagnostic;
 
 pub struct StrictEquality;
 
@@ -8,17 +9,31 @@ impl Rule for StrictEquality {
         "strict-equality"
     }
 
-    fn check(&self, rule_context: &RuleContext) -> bool {
-        for element in rule_context.root.descendants_with_tokens() {
-            if element.kind() == SyntaxKind::EQ2 {
-                return true;
-            }
-            
-            if element.kind() == SyntaxKind::NEQ {
-                return true;
+    fn check(&self, ctx: &RuleContext) -> Vec<Diagnostic> {
+        let mut diagnostics = Vec::new();
+
+        for element in ctx.root.descendants_with_tokens() {
+            match element.kind() {
+                SyntaxKind::EQ2 => {
+                    diagnostics.push(
+                        ctx.diagnostic_at(
+                            element.text_range(),
+                            "Use === instead of == for strict equality",
+                        )
+                    );
+                }
+                SyntaxKind::NEQ => {
+                    diagnostics.push(
+                        ctx.diagnostic_at(
+                            element.text_range(),
+                            "Use !== instead of != for strict equality",
+                        )
+                    );
+                }
+                _ => {}
             }
         }
-        
-        false
+
+        diagnostics
     }
 }

@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use rslint_parser::{SyntaxKind, SyntaxToken};
 use crate::{Rule, RuleContext};
+use crate::diagnostics::Diagnostic;
 
 pub struct NoUnusedVars;
 
@@ -9,9 +10,11 @@ impl Rule for NoUnusedVars {
         "no-unused-vars"
     }
 
-    fn check(&self, rule_context: &RuleContext) -> bool {
-        let mut declared: HashSet<String> = HashSet::new();
-        let mut used: HashSet<String> = HashSet::new();
+    fn check(&self, rule_context: &RuleContext) -> Vec<Diagnostic> {
+        let mut diagnostics = vec![];
+        
+        let mut declared: HashSet<SyntaxToken> = HashSet::new();
+        let mut used: HashSet<SyntaxToken> = HashSet::new();
 
         for element in rule_context.root.descendants_with_tokens() {
             let token = match element.as_token() {
@@ -24,8 +27,6 @@ impl Rule for NoUnusedVars {
             if name == "let" || name == "var" || name == "const" {
                 continue;
             }
-
-
 
             let is_direct_name_parent =
                 token.parent().kind() == SyntaxKind::NAME;
@@ -42,7 +43,7 @@ impl Rule for NoUnusedVars {
             }
 
             if is_direct_name_parent && has_decl_ancestor {
-                declared.insert(name);
+                declared.insert(token.clone());
                 continue;
             }
             
@@ -74,17 +75,17 @@ impl Rule for NoUnusedVars {
             }
 
             if is_used {
-                used.insert(name);
+                used.insert(token.clone());
             }
         }
         
 
-        for name in declared {
-            if !used.contains(&name) {
-                return true;
+        for tkn in declared {
+            if !used.contains(&tkn) {
+                diagnostics.push(rule_context.diagnostic_at(tkn.text_range(), format!("Unused variable {}", tkn.text())));
             }
         }
 
-        false
+        diagnostics
     }
 }
