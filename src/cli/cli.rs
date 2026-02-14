@@ -19,7 +19,7 @@ pub fn parse_cli() -> Result<CliCommands, CliError> {
     Ok(cli_commands)
 }
 
-fn get_file_paths(args: &[String], cli_commands: &mut CliCommands) -> Result<(), CliError> {
+pub fn get_file_paths(args: &[String], cli_commands: &mut CliCommands) -> Result<(), CliError> {
     let mut idx = 0;
     let cwd = env::current_dir()?;
     while idx < args.len() {
