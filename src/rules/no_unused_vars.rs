@@ -1,5 +1,5 @@
-use std::collections::HashSet;
-use rslint_parser::{SyntaxKind, SyntaxToken};
+use std::collections::HashMap;
+use rslint_parser::{SyntaxKind, SyntaxNodeExt, SyntaxToken};
 use crate::{Rule, RuleContext};
 use crate::diagnostics::Diagnostic;
 
@@ -10,79 +10,53 @@ impl Rule for NoUnusedVars {
         "no-unused-vars"
     }
 
-    fn check(&self, rule_context: &RuleContext) -> Vec<Diagnostic> {
-        let mut diagnostics = vec![];
-        
-        let mut declared: HashSet<SyntaxToken> = HashSet::new();
-        let mut used: HashSet<SyntaxToken> = HashSet::new();
+    fn check(&self, ctx: &RuleContext) -> Vec<Diagnostic> {
+        let mut diagnostics = Vec::new();
 
-        for element in rule_context.root.descendants_with_tokens() {
-            let token = match element.as_token() {
-                Some(t) if t.kind() == SyntaxKind::IDENT => t,
-                _ => continue,
-            };
+        let mut declared: HashMap<String, SyntaxToken> = HashMap::new();
+        let mut used: std::collections::HashSet<String> = std::collections::HashSet::new();
 
-            let name = token.text().to_string();
-            
-            if name == "let" || name == "var" || name == "const" {
-                continue;
-            }
+        for node in ctx.root.descendants() {
+            match node.kind() {
+                SyntaxKind::NAME => {
+                    let parent = match node.parent() {
+                        Some(p) => p,
+                        None => continue,
+                    };
 
-            let is_direct_name_parent =
-                token.parent().kind() == SyntaxKind::NAME;
+                    let name = node.text().to_string();
 
-            let mut has_decl_ancestor = false;
+                    let is_decl = parent
+                        .ancestors()
+                        .any(|a| matches!(
+                            a.kind(),
+                            SyntaxKind::VAR_DECL | SyntaxKind::PARAMETER_LIST
+                        ));
 
-            for ancestor in token.parent().ancestors() {
-                if ancestor.kind() == SyntaxKind::VAR_DECL
-                    || ancestor.kind() == SyntaxKind::PARAMETER_LIST
-                {
-                    has_decl_ancestor = true;
-                    break;
-                }
-            }
-
-            if is_direct_name_parent && has_decl_ancestor {
-                declared.insert(token.clone());
-                continue;
-            }
-            
-
-            let mut saw_name_ref = false;
-            let mut is_used = false;
-
-            for ancestor in token.parent().ancestors() {
-                match ancestor.kind() {
-                    SyntaxKind::NAME_REF => {
-                        saw_name_ref = true;
+                    if is_decl {
+                        declared.entry(name).or_insert_with(|| {
+                            node.first_token().unwrap()
+                        });
                     }
-
-                    SyntaxKind::ARG_LIST
-                    | SyntaxKind::VAR_DECL
-                    | SyntaxKind::RETURN_STMT
-                    if saw_name_ref =>
-                        {
-                            is_used = true;
-                            break;
-                        }
-                    
-                    SyntaxKind::CALL_EXPR if saw_name_ref => {
-                        break;
-                    }
-
-                    _ => {}
                 }
-            }
 
-            if is_used {
-                used.insert(token.clone());
+                SyntaxKind::NAME_REF => {
+                    let name = node.text().to_string();
+                    used.insert(name);
+                }
+
+                _ => {}
             }
         }
-        
 
-        for tkn in declared {
-            if !used.contains(&tkn) {
-                diagnostics.push(rule_context.diagnostic_at(tkn.text_range(), format!("Unused variable {}", tkn.text())));
+        for (name, token) in declared {
+            if !used.contains(&name) {
+                diagnostics.push(
+                    ctx.diagnostic_at(
+                        token.text_range(),
+                        format!("Unused variable '{}'", name),
+                    )
+                );
             }
         }
 

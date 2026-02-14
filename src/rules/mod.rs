@@ -15,3 +15,15 @@ pub use no_console_log::*;
 pub use max_line_length::*;
 pub use no_duplicate_params::*;
 pub use no_empty_block::*;
+
+pub fn default_rules() -> Vec<Box<dyn Rule>> {
+    vec![
+        Box::new(MaxLineLength),
+        Box::new(NoConsoleLog),
+        Box::new(NoDuplicateParams),
+        Box::new(NoEmptyBlock),
+        Box::new(StrictEquality),
+        Box::new(NoUnusedVars),
+        Box::new(NoVar),
+    ]
+}
