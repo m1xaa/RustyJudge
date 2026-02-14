@@ -37,3 +37,77 @@ impl Rule for StrictEquality {
         diagnostics
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::make_context;
+
+    #[test]
+    fn detects_double_equals() {
+        let ctx = make_context("a == b;", None);
+        let rule = StrictEquality;
+
+        let diagnostics = rule.check(&ctx);
+
+        assert_eq!(diagnostics.len(), 1);
+    }
+
+    #[test]
+    fn detects_not_equals() {
+        let ctx = make_context("a != b;", None);
+        let rule = StrictEquality;
+
+        let diagnostics = rule.check(&ctx);
+
+        assert_eq!(diagnostics.len(), 1);
+    }
+
+    #[test]
+    fn ignores_strict_equals() {
+        let ctx = make_context("a === b;", None);
+        let rule = StrictEquality;
+
+        let diagnostics = rule.check(&ctx);
+
+        assert!(diagnostics.is_empty());
+    }
+
+    #[test]
+    fn ignores_strict_not_equals() {
+        let ctx = make_context("a !== b;", None);
+        let rule = StrictEquality;
+
+        let diagnostics = rule.check(&ctx);
+
+        assert!(diagnostics.is_empty());
+    }
+
+    #[test]
+    fn detects_multiple_violations() {
+        let ctx = make_context("
+            if (a == b) {}
+            if (c != d) {}
+        ", None);
+
+        let rule = StrictEquality;
+        let diagnostics = rule.check(&ctx);
+
+        assert_eq!(diagnostics.len(), 2);
+    }
+
+    #[test]
+    fn mixed_strict_and_non_strict() {
+        let ctx = make_context("
+            if (a == b) {}
+            if (c === d) {}
+            if (e != f) {}
+        ", None);
+
+        let rule = StrictEquality;
+        let diagnostics = rule.check(&ctx);
+
+        assert_eq!(diagnostics.len(), 2);
+    }
+}
+

@@ -31,3 +31,76 @@ impl Rule for NoVar {
         diagnostics
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::make_context;
+
+    #[test]
+    fn detects_single_var_declaration() {
+        let ctx = make_context("var x = 5;", None);
+        let rule = NoVar;
+
+        let diagnostics = rule.check(&ctx);
+
+        assert_eq!(diagnostics.len(), 1);
+    }
+
+    #[test]
+    fn does_not_flag_let() {
+        let ctx = make_context("let x = 5;", None);
+        let rule = NoVar;
+
+        let diagnostics = rule.check(&ctx);
+
+        assert!(diagnostics.is_empty());
+    }
+
+    #[test]
+    fn does_not_flag_const() {
+        let ctx = make_context("const x = 5;", None);
+        let rule = NoVar;
+
+        let diagnostics = rule.check(&ctx);
+
+        assert!(diagnostics.is_empty());
+    }
+
+    #[test]
+    fn detects_multiple_var_declarations() {
+        let ctx = make_context("
+            var a = 1;
+            var b = 2;
+        ", None);
+
+        let rule = NoVar;
+        let diagnostics = rule.check(&ctx);
+
+        assert_eq!(diagnostics.len(), 2);
+    }
+
+    #[test]
+    fn detects_var_inside_function() {
+        let ctx = make_context("
+            function test() {
+                var x = 10;
+            }
+        ", None);
+
+        let rule = NoVar;
+        let diagnostics = rule.check(&ctx);
+
+        assert_eq!(diagnostics.len(), 1);
+    }
+
+    #[test]
+    fn ignores_no_declarations() {
+        let ctx = make_context("console.log('hello');", None);
+        let rule = NoVar;
+
+        let diagnostics = rule.check(&ctx);
+
+        assert!(diagnostics.is_empty());
+    }
+}

@@ -41,3 +41,60 @@ impl Rule for NoConsoleLog {
         diagnostics
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{make_context, RuleContext};
+    use rslint_parser::parse_text;
+
+    #[test]
+    fn detects_console_log_call() {
+        let ctx = make_context("console.log('hello');", Option::None);
+        let rule = NoConsoleLog;
+
+        let diagnostics = rule.check(&ctx);
+
+        assert_eq!(diagnostics.len(), 1);
+    }
+
+    #[test]
+    fn ignores_other_console_methods() {
+        let ctx = make_context("console.error('fail');", Option::None);
+        let rule = NoConsoleLog;
+
+        let diagnostics = rule.check(&ctx);
+
+        assert!(diagnostics.is_empty());
+    }
+
+    #[test]
+    fn ignores_similar_but_not_exact_pattern() {
+        let ctx = make_context("myconsole.log('hello');", Option::None);
+        let rule = NoConsoleLog;
+
+        let diagnostics = rule.check(&ctx);
+        assert!(diagnostics.is_empty());
+    }
+
+    #[test]
+    fn detects_multiple_console_logs() {
+        let ctx = make_context(
+            "console.log('a');\nconsole.log('b');", 
+            Option::None
+        );
+        let rule = NoConsoleLog;
+        let diagnostics = rule.check(&ctx);
+        assert_eq!(diagnostics.len(), 2);
+    }
+
+    #[test]
+    fn detects_console_log_without_call_parentheses() {
+        let ctx = make_context("console.log;", Option::None);
+        let rule = NoConsoleLog;
+
+        let diagnostics = rule.check(&ctx);
+        assert_eq!(diagnostics.len(), 1);
+    }
+}
+

@@ -1,4 +1,4 @@
-use rslint_parser::{SyntaxNode, TextRange};
+use rslint_parser::{parse_text, SyntaxNode, TextRange};
 use crate::diagnostics::Diagnostic;
 
 pub trait Rule {
@@ -51,4 +51,15 @@ impl RuleContext {
 
         (line, col)
     }
+    
+}
+
+pub fn make_context(source: &str, max_len: Option<usize>) -> RuleContext {
+    let max_len = max_len.unwrap_or(120);
+
+    let parse = parse_text(source, 0).to_syntax();
+    assert!(parse.errors().is_empty());
+
+    let syntax = parse.syntax();
+    RuleContext::new(syntax, source.to_string(), max_len)
 }
