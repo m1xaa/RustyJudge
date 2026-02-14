@@ -4,7 +4,7 @@ mod rules;
 mod diagnostics;
 mod linter;
 
-pub use parser::*;
-pub use cli::*;
+pub use parser::parse_js_file;
+pub use cli::parse_cli;
 pub use rules::*;
-pub use linter::*;
+pub use linter::run_cli;

@@ -1,3 +1,4 @@
+use std::fmt;
 use rslint_parser::{parse_text, SyntaxNode, TextRange};
 use crate::diagnostics::Diagnostic;
 
@@ -7,14 +8,15 @@ pub trait Rule {
 }
 
 pub struct RuleContext {
+    pub file_name: String,
     pub root: SyntaxNode,
     pub source: String,
     pub max_line_length: usize,
 }
 
 impl RuleContext {
-    pub fn new(root: SyntaxNode, source: String, max_line_length: usize) -> Self {
-        RuleContext { root, source, max_line_length }
+    pub fn new(file_name: String, root: SyntaxNode, source: String, max_line_length: usize) -> Self {
+        RuleContext { file_name, root, source, max_line_length }
     }
 
     pub fn diagnostic_at(
@@ -51,8 +53,14 @@ impl RuleContext {
 
         (line, col)
     }
-    
 }
+
+impl fmt::Display for RuleContext {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "File: {}", self.file_name)
+    }
+}
+
 
 pub fn make_context(source: &str, max_len: Option<usize>) -> RuleContext {
     let max_len = max_len.unwrap_or(120);
@@ -61,5 +69,5 @@ pub fn make_context(source: &str, max_len: Option<usize>) -> RuleContext {
     assert!(parse.errors().is_empty());
 
     let syntax = parse.syntax();
-    RuleContext::new(syntax, source.to_string(), max_len)
+    RuleContext::new("test.js".to_string(), syntax, source.to_string(), max_len)
 }

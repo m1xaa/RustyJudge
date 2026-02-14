@@ -80,7 +80,7 @@ mod tests {
     #[test]
     fn detects_multiple_console_logs() {
         let ctx = make_context(
-            "console.log('a');\nconsole.log('b');", 
+            "console.log('a');\nconsole.log('b');",
             Option::None
         );
         let rule = NoConsoleLog;

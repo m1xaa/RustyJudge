@@ -1,6 +1,5 @@
 use std::{fmt, io};
 use std::fmt::Formatter;
-use crate::ParseError;
 
 #[derive(Debug)]
 pub enum CliError {

@@ -1,4 +1,5 @@
-#[derive(Debug)]
+use std::fmt;
+
 pub struct Diagnostic {
     row: usize,
     col: usize,
@@ -16,5 +17,13 @@ impl Diagnostic {
     
     pub fn message(&self) -> &str {
         &self.message
+    }
+}
+
+
+
+impl fmt::Display for Diagnostic {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "row:col  --> {}:{}  {}", self.row, self.col, self.message)
     }
 }
