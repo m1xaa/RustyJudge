@@ -27,3 +27,53 @@ impl Rule for MaxLineLength {
         diagnostics
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use rslint_parser::parse_text;
+    use super::*;
+    use crate::{make_context, RuleContext};
+
+
+    #[test]
+    fn no_diagnostic_when_lines_within_limit() {
+        let ctx = make_context("let x = 5;", Option::from(20));
+        let rule = MaxLineLength;
+
+        let diagnostics = rule.check(&ctx);
+
+        assert!(diagnostics.is_empty());
+    }
+
+    #[test]
+    fn detects_line_exceeding_limit() {
+        let ctx = make_context("12345678901", Option::from(10));
+        let rule = MaxLineLength;
+
+        let diagnostics = rule.check(&ctx);
+
+        assert_eq!(diagnostics.len(), 1);
+    }
+
+    #[test]
+    fn detects_multiple_long_lines() {
+        let source = "short\n123456\nok\n1234567";
+        let ctx = make_context(source, Option::from(5));
+        let rule = MaxLineLength;
+
+        let diagnostics = rule.check(&ctx);
+
+        assert_eq!(diagnostics.len(), 2);
+    }
+
+    #[test]
+    fn uses_overridden_max_length_from_context() {
+        let ctx = make_context("123456", Option::from(3));
+        let rule = MaxLineLength;
+
+        let diagnostics = rule.check(&ctx);
+
+        assert_eq!(diagnostics.len(), 1);
+    }
+}
+

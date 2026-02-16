@@ -5,4 +5,4 @@ mod cli;
 mod tests;
 
 
-pub use cli::*;
+pub use cli::parse_cli;

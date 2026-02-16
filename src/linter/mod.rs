@@ -1,3 +1,3 @@
 mod linter;
 
-pub use linter::*;
+pub use linter::run_cli;

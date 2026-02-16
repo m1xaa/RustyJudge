@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use crate::cli::command::CliCommands;
 use crate::cli::error::CliError;
 use std::fs::File;
+use crate::cli::cli::get_file_paths;
 
 #[test]
 fn new_cli_commands_has_default_values() {
@@ -50,7 +51,7 @@ fn returns_error_for_unknown_flag() {
     let args = vec!["--unknown".to_string()];
     let mut cli = CliCommands::new();
 
-    let result = super::get_file_paths(&args, &mut cli);
+    let result = get_file_paths(&args, &mut cli);
 
     assert!(matches!(result, Err(CliError::InvalidFlag(_))));
 }
@@ -63,7 +64,7 @@ fn returns_error_for_invalid_flag_value() {
     ];
 
     let mut cli = CliCommands::new();
-    let result = super::get_file_paths(&args, &mut cli);
+    let result = get_file_paths(&args, &mut cli);
 
     assert!(matches!(result, Err(CliError::InvalidFlagValue(_))));
 }
@@ -90,7 +91,7 @@ fn rejects_non_js_file() {
     let args = vec![file_name.to_string()];
     let mut cli = CliCommands::new();
 
-    let result = super::get_file_paths(&args, &mut cli);
+    let result = get_file_paths(&args, &mut cli);
 
     assert!(matches!(result, Err(CliError::InvalidFlag(_))));
 
