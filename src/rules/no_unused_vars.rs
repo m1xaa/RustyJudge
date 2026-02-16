@@ -1,7 +1,7 @@
 use std::collections::HashMap;
-use rslint_parser::{SyntaxKind, SyntaxNodeExt, SyntaxToken};
-use crate::{Rule, RuleContext};
+use rslint_parser::{SyntaxKind, SyntaxToken};
 use crate::diagnostics::Diagnostic;
+use crate::rules::{Rule, RuleContext};
 
 pub struct NoUnusedVars;
 
@@ -66,8 +66,8 @@ impl Rule for NoUnusedVars {
 
 #[cfg(test)]
 mod tests {
+    use crate::rules::make_context;
     use super::*;
-    use crate::make_context;
 
     #[test]
     fn detects_unused_var() {

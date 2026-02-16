@@ -1,25 +1,17 @@
 use std::error::Error;
-use crate::{default_rules, parse_cli, parse_js_file, Rule, RuleContext};
+use crate::cli::parse_cli;
 use crate::diagnostics::Diagnostic;
 use crate::linter::file_report::FileReport;
+use crate::parser::parse_js_file;
+use crate::rules::{default_rules, Rule, RuleContext};
 
 pub struct Linter {
     rules: Vec<Box<dyn Rule>>,
 }
 
 impl Linter {
-    pub fn new() -> Self {
-        Self {
-            rules: Vec::new(),
-        }
-    }
-    
     pub fn with_rules(rules: Vec<Box<dyn Rule>>) -> Self {
         Self { rules }
-    }
-    
-    pub fn add_rule<R: Rule + 'static>(&mut self, rule: R) {
-        self.rules.push(Box::new(rule));
     }
     
     pub fn run(&self, ctx: &RuleContext) -> Vec<Diagnostic> {

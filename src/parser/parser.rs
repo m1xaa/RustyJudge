@@ -1,5 +1,5 @@
 use std::{fs, path::Path};
-use rslint_parser::{parse_text, Parse, SyntaxNode};
+use rslint_parser::{parse_text, SyntaxNode};
 
 use crate::parser::error::ParseError;
 

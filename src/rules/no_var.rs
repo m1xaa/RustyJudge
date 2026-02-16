@@ -34,8 +34,8 @@ impl Rule for NoVar {
 
 #[cfg(test)]
 mod tests {
+    use crate::rules::make_context;
     use super::*;
-    use crate::make_context;
 
     #[test]
     fn detects_single_var_declaration() {

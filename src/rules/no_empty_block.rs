@@ -1,6 +1,6 @@
-use rslint_parser::{SyntaxKind, SyntaxNode, SyntaxNodeExt};
-use crate::{Rule, RuleContext};
+use rslint_parser::{SyntaxKind, SyntaxNodeExt};
 use crate::diagnostics::Diagnostic;
+use crate::rules::{Rule, RuleContext};
 
 pub struct NoEmptyBlock;
 
@@ -46,8 +46,8 @@ impl Rule for NoEmptyBlock {
 
 #[cfg(test)]
 mod tests {
+    use crate::rules::make_context;
     use super::*;
-    use crate::make_context;
 
     #[test]
     fn detects_simple_empty_block() {
