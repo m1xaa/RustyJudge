@@ -1,5 +1,7 @@
 use std::fmt;
+use serde::Serialize;
 
+#[derive(Debug, Serialize)]
 pub struct Diagnostic {
     row: usize,
     col: usize,
