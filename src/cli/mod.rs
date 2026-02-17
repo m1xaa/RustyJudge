@@ -1,6 +1,6 @@
 mod error;
 mod command;
-mod cli;
+pub(crate) mod cli;
 #[cfg(test)]
 mod tests;
 

@@ -1,76 +1,46 @@
 import * as vscode from 'vscode';
-import { exec } from 'child_process';
 import * as path from 'path';
+import { LanguageClient, LanguageClientOptions, ServerOptions, TransportKind } from 'vscode-languageclient/node';
 
-let diagnosticCollection: vscode.DiagnosticCollection;
+let client: LanguageClient | undefined;
 
 export function activate(context: vscode.ExtensionContext) {
+  const out = vscode.window.createOutputChannel('RustyJudge');
+  out.appendLine('activate() called');
 
-    diagnosticCollection = vscode.languages.createDiagnosticCollection('rustyjudge');
-    context.subscriptions.push(diagnosticCollection);
+  const serverPath = path.join(
+    context.extensionPath,
+    '..',
+    'target',
+    'debug',
+    'rusty_judge_lsp.exe'
+  );
 
-    const disposable = vscode.commands.registerCommand('rustyjudge.run', () => {
+  out.appendLine('serverPath = ' + serverPath);
 
-        const editor = vscode.window.activeTextEditor;
-        if (!editor) {
-            vscode.window.showErrorMessage("No active file");
-            return;
-        }
+  const serverOptions: ServerOptions = {
+    command: serverPath,
+    transport: TransportKind.stdio,
+  };
 
-        const filePath = editor.document.fileName;
+  const clientOptions: LanguageClientOptions = {
+    documentSelector: [
+      { scheme: 'file', language: 'javascript' },
+    ],
+    outputChannel: out,
+    traceOutputChannel: out,
+  };
 
-        const binaryPath = path.join(
-            context.extensionPath,
-            '..',
-            'target',
-            'debug',
-            'rusty_judge.exe'
-        );
+  client = new LanguageClient('rustyjudge', 'RustyJudge LSP', serverOptions, clientOptions);
 
-        exec(`"${binaryPath}" "${filePath}"`, (error, stdout, stderr) => {
-
-            if (error) {
-                vscode.window.showErrorMessage("RustyJudge failed to execute");
-                console.error(stderr);
-                return;
-            }
-
-            try {
-                const reports = JSON.parse(stdout);
-
-                diagnosticCollection.clear();
-
-                for (const report of reports) {
-
-                    const uri = vscode.Uri.file(report.file);
-                    const diagnostics: vscode.Diagnostic[] = [];
-
-                    for (const d of report.diagnostics) {
-
-                        const range = new vscode.Range(
-                            new vscode.Position(d.row - 1, d.col - 1),
-                            new vscode.Position(d.row - 1, d.col)
-                        );
-
-                        const diagnostic = new vscode.Diagnostic(
-                            range,
-                            d.message,
-                            vscode.DiagnosticSeverity.Warning
-                        );
-
-                        diagnostics.push(diagnostic);
-                    }
-
-                    diagnosticCollection.set(uri, diagnostics);
-                }
-
-            } catch (e) {
-                vscode.window.showErrorMessage("Invalid JSON from RustyJudge");
-                console.error(e);
-            }
-        });
-
+  context.subscriptions.push(client);
+  client.start().then(() => out.appendLine('client.start() resolved'))
+    .catch(err => {
+      out.appendLine('client.start() FAILED: ' + String(err));
+      console.error(err);
     });
+}
 
-    context.subscriptions.push(disposable);
+export async function deactivate() {
+  await client?.stop();
 }

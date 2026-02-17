@@ -3,6 +3,7 @@ use std::{env, fs};
 use crate::cli::command::CliCommands;
 use crate::cli::error::CliError;
 
+
 pub fn parse_cli() -> Result<CliCommands, CliError> {
     let args: Vec<String> = env::args().skip(1).collect();
 

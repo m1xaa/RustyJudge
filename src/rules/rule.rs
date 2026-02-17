@@ -2,7 +2,7 @@ use std::fmt;
 use rslint_parser::{parse_text, SyntaxNode, TextRange};
 use crate::diagnostics::Diagnostic;
 
-pub trait Rule {
+pub trait Rule: Send + Sync {
     fn name(&self) -> &'static str;
     fn check(&self, rule_context: &RuleContext) -> Vec<Diagnostic>;
 }
