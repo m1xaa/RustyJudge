@@ -3,8 +3,8 @@ use crate::cli::parse_cli;
 use crate::linter;
 use crate::linter::file_report::FileReport;
 use crate::linter::lint_file;
-use crate::parser::{parse_source, read_js_file};
-use crate::rules::{default_rules, RuleContext};
+use crate::parser::read_js_file;
+use crate::rules::default_rules;
 
 pub fn run_cli() -> Result<(), Box<dyn Error>> {
     let cli_commands = parse_cli()?;
