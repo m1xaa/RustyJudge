@@ -12,7 +12,7 @@ pub struct Cfg {
 #[derive(Debug, Clone)]
 pub struct BasicBlock {
     pub id: BlockId,
-    pub stmts: Vec<StatementInfo>,
+    pub statements: Vec<StatementInfo>,
     pub terminator: Terminator,
     pub predecessors: Vec<BlockId>,
 }
@@ -48,7 +48,7 @@ pub enum Terminator {
     Return {
         value_uses: Vec<SymbolId>,
     },
-    Unreachable,
+    Unset,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
