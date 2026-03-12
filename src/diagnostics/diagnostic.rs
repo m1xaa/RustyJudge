@@ -1,8 +1,10 @@
 use std::fmt;
+use serde::Serialize;
 
+#[derive(Debug, Serialize)]
 pub struct Diagnostic {
-    row: usize,
-    col: usize,
+    pub(crate) row: usize,
+    pub(crate) col: usize,
     message: String
 }
 

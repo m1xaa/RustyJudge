@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use rslint_parser::{SyntaxKind, SyntaxNodeExt};
-use crate::{Rule, RuleContext};
 use crate::diagnostics::Diagnostic;
+use crate::rules::{Rule, RuleContext};
 
 pub struct NoDuplicateParams;
 
@@ -48,8 +48,8 @@ impl Rule for NoDuplicateParams {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{make_context, RuleContext};
     use rslint_parser::parse_text;
+    use crate::rules::make_context;
 
     #[test]
     fn no_duplicate_params_ok() {

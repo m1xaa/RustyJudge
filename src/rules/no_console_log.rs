@@ -1,6 +1,6 @@
-use rslint_parser::SyntaxKind;
-use crate::{Rule, RuleContext};
+
 use crate::diagnostics::Diagnostic;
+use crate::rules::{Rule, RuleContext};
 
 pub struct NoConsoleLog;
 
@@ -27,7 +27,7 @@ impl Rule for NoConsoleLog {
                 _ => continue,
             };
 
-            let log = match dot.next_token() {
+            let _ = match dot.next_token() {
                 Some(t) if t.text() == "log" => t,
                 _ => continue,
             };
@@ -44,9 +44,9 @@ impl Rule for NoConsoleLog {
 
 #[cfg(test)]
 mod tests {
+    use crate::rules::make_context;
     use super::*;
-    use crate::{make_context, RuleContext};
-    use rslint_parser::parse_text;
+
 
     #[test]
     fn detects_console_log_call() {

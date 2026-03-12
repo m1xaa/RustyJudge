@@ -1,5 +1,6 @@
-use crate::{Rule, RuleContext};
+
 use crate::diagnostics::Diagnostic;
+use crate::rules::{Rule, RuleContext};
 
 pub struct MaxLineLength;
 
@@ -31,8 +32,8 @@ impl Rule for MaxLineLength {
 #[cfg(test)]
 mod tests {
     use rslint_parser::parse_text;
+    use crate::rules::make_context;
     use super::*;
-    use crate::{make_context, RuleContext};
 
 
     #[test]

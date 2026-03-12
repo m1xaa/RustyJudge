@@ -1,6 +1,6 @@
 use rslint_parser::SyntaxKind;
-use crate::{Rule, RuleContext};
 use crate::diagnostics::Diagnostic;
+use crate::rules::{Rule, RuleContext};
 
 pub struct StrictEquality;
 
@@ -40,8 +40,8 @@ impl Rule for StrictEquality {
 
 #[cfg(test)]
 mod tests {
+    use crate::rules::make_context;
     use super::*;
-    use crate::make_context;
 
     #[test]
     fn detects_double_equals() {

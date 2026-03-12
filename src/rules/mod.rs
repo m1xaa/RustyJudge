@@ -16,7 +16,7 @@ pub use max_line_length::*;
 pub use no_duplicate_params::*;
 pub use no_empty_block::*;
 
-pub fn default_rules() -> Vec<Box<dyn Rule>> {
+pub fn default_rules() -> Vec<Box<dyn Rule + Send + Sync>> {
     vec![
         Box::new(MaxLineLength),
         Box::new(NoConsoleLog),
