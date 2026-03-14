@@ -17,6 +17,18 @@ pub struct BasicBlock {
     pub predecessors: Vec<BlockId>,
 }
 
+impl BasicBlock {
+    pub fn successors(&self) -> Vec<BlockId> {
+        match &self.terminator {
+            Terminator::Goto(target) => vec![*target],
+            Terminator::Branch { then_bb, else_bb, .. } => vec![*then_bb, *else_bb],
+            Terminator::Return { .. } => vec![],
+            Terminator::Unset => vec![],
+            Terminator::Exit => vec![],
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct StatementInfo {
     pub id: StatementId,
@@ -49,6 +61,7 @@ pub enum Terminator {
         value_uses: Vec<SymbolId>,
     },
     Unset,
+    Exit
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -72,9 +85,4 @@ pub enum SymbolKind {
     Const,
     Param,
     Function,
-}
-
-#[derive(Debug, Default)]
-pub struct SymbolTable {
-    pub symbols: Vec<Symbol>,
 }

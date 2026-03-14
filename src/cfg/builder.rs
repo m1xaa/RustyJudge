@@ -28,7 +28,7 @@ impl CfgBuilder {
             BasicBlock {
                 id: exit,
                 statements: vec![],
-                terminator: Terminator::Unset,
+                terminator: Terminator::Exit,
                 predecessors: vec![],
             },
         ];
@@ -53,15 +53,19 @@ impl CfgBuilder {
     }
 
     fn add_edge(&mut self, from: BlockId, to: BlockId) {
-        self.cfg.blocks[to].predecessors.push(from);
+        if !self.cfg.blocks[to].predecessors.contains(&from) {
+            self.cfg.blocks[to].predecessors.push(from);
+        }
     }
 
     fn switch_to_block(&mut self, block_id: BlockId) {
+        debug_assert!(block_id < self.cfg.blocks.len());
         self.current = block_id;
     }
 
     fn terminate_current(&mut self, term: Terminator) {
         let from = self.current;
+        debug_assert!(matches!(self.cfg.blocks[from].terminator, Terminator::Unset));
         match &term {
             Terminator::Goto(to) => self.add_edge(from, *to),
             Terminator::Branch { then_bb, else_bb, .. } => {
@@ -72,12 +76,17 @@ impl CfgBuilder {
                 self.add_edge(from, self.cfg.exit);
             }
             Terminator::Unset => {}
+            Terminator::Exit => {}
         }
         self.cfg.blocks[from].terminator = term;
     }
 
+    fn current_block_is_open(&self) -> bool {
+        matches!(self.cfg.blocks[self.current].terminator, Terminator::Unset)
+    }
+
     pub fn finish(mut self) -> Cfg {
-        if matches!(self.cfg.blocks[self.current].terminator, Terminator::Unset) {
+        if self.current_block_is_open() {
             self.terminate_current(Terminator::Goto(self.cfg.exit));
         }
 
@@ -170,7 +179,7 @@ impl CfgBuilder {
 
         self.switch_to_block(then_block);
         then_builder(self);
-        if matches!(self.cfg.blocks[self.current].terminator, Terminator::Unset) {
+        if self.current_block_is_open() {
             self.terminate_current(Terminator::Goto(join_block));
         }
 
@@ -178,7 +187,7 @@ impl CfgBuilder {
         if let Some(build_else_branch) = else_builder {
             build_else_branch(self);
         }
-        if matches!(self.cfg.blocks[self.current].terminator, Terminator::Unset) {
+        if self.current_block_is_open() {
             self.terminate_current(Terminator::Goto(join_block));
         }
 
@@ -234,7 +243,7 @@ impl CfgBuilder {
         let body_block = self.new_block();
         let exit_block = self.new_block();
 
-        if matches!(self.cfg.blocks[self.current].terminator, Terminator::Unset) {
+        if self.current_block_is_open() {
             self.terminate_current(Terminator::Goto(condition_block));
         }
 
@@ -253,7 +262,7 @@ impl CfgBuilder {
         self.switch_to_block(body_block);
         body_builder(self);
 
-        if matches!(self.cfg.blocks[self.current].terminator, Terminator::Unset) {
+        if self.current_block_is_open() {
             self.terminate_current(Terminator::Goto(condition_block));
         }
 
