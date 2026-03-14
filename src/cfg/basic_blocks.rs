@@ -1,3 +1,5 @@
+use rslint_parser::{ast, AstNode, NodeOrToken, SyntaxNode};
+
 pub type BlockId = usize;
 pub type StatementId = usize;
 pub type SymbolId = usize;
@@ -70,6 +72,16 @@ pub struct Span {
     pub end: u32,
 }
 
+impl Span {
+    pub fn from_node(node: &SyntaxNode) -> Self {
+        let range = node.text_range();
+        Span {
+            start: range.start().into(),
+            end: range.end().into(),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Symbol {
     pub id: SymbolId,
@@ -85,4 +97,26 @@ pub enum SymbolKind {
     Const,
     Param,
     Function,
+}
+
+
+
+impl From<&ast::VarDecl> for SymbolKind {
+    fn from(value: &ast::VarDecl) -> Self {
+        let first_token = value
+            .syntax()
+            .children_with_tokens()
+            .find_map(|el| match el {
+                NodeOrToken::Token(tok) => Some(tok),
+                NodeOrToken::Node(_) => None,
+            })
+            .expect("VarDecl should have a declaration keyword");
+
+        match first_token.text().as_str() {
+            "var" => SymbolKind::Var,
+            "let" => SymbolKind::Let,
+            "const" => SymbolKind::Const,
+            other => panic!("unexpected var decl keyword: {}", other),
+        }
+    }
 }

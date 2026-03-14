@@ -86,17 +86,17 @@ impl Resolver {
     }
 
     fn collect_expr_uses_into(&self, node: &SyntaxNode, uses: &mut Vec<SymbolId>) {
-        for child in node.children() {
-            if let Some(name_ref) = ast::NameRef::cast(child.clone()) {
-                let name = name_ref.syntax().text().to_string();
+        if let Some(name_ref) = ast::NameRef::cast(node.clone()) {
+            let name = name_ref.syntax().text().to_string();
 
-                if let Some(symbol_id) = self.resolve(&name) {
-                    if !uses.contains(&symbol_id) {
-                        uses.push(symbol_id);
-                    }
+            if let Some(symbol_id) = self.resolve(&name) {
+                if !uses.contains(&symbol_id) {
+                    uses.push(symbol_id);
                 }
             }
+        }
 
+        for child in node.children() {
             self.collect_expr_uses_into(&child, uses);
         }
     }

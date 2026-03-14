@@ -9,3 +9,5 @@ mod cfg;
 
 pub use run_cli::run_cli;
 pub use lsp::run_lsp_server;
+pub use cfg::build_cfg_from_root;
+pub use parser::*;
