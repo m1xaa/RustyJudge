@@ -38,8 +38,13 @@ impl<'a> AstLowerer<'a> {
         match stmt {
             ast::Stmt::ExprStmt(expr_stmt) => {
                 if let Some(expr) = expr_stmt.expr() {
-                    let uses = self.resolver.collect_expr_uses(expr);
                     let span = Span::from_node(expr_stmt.syntax());
+
+                    if self.try_lower_assignment(expr.clone(), span)? {
+                        return Ok(());
+                    }
+
+                    let uses = self.resolver.collect_expr_uses(expr);
                     self.builder.build_expression_statement(span, uses);
                 }
             }
@@ -58,6 +63,7 @@ impl<'a> AstLowerer<'a> {
             ast::Stmt::Decl(decl) => {
                 if let ast::Decl::VarDecl(var_decl) = decl {
                     let decl_kind: SymbolKind = (&var_decl).into();
+
                     for child in var_decl.syntax().children() {
                         if let Some(declarator) = ast::Declarator::cast(child) {
                             let span = Span::from_node(declarator.syntax());
@@ -65,15 +71,10 @@ impl<'a> AstLowerer<'a> {
                             let name = simple_decl_name(&declarator)
                                 .ok_or("expected simple identifier declarator")?;
 
-                            let symbol_id = self
-                                .resolver
-                                .declare(name, decl_kind, span)?;
+                            let symbol_id = self.resolver.declare(name, decl_kind, span)?;
 
                             let uses = declarator_init_expr(&declarator)
-                                .map(|expr| {
-                                    println!("{:#?}", expr);
-                                    self.resolver.collect_expr_uses(expr)
-                                })
+                                .map(|expr| self.resolver.collect_expr_uses(expr))
                                 .unwrap_or_default();
 
                             self.builder
@@ -83,10 +84,56 @@ impl<'a> AstLowerer<'a> {
                 }
             }
 
+            ast::Stmt::BlockStmt(block_stmt) => {
+                self.lower_block_stmt(&block_stmt)?;
+            }
+
             _ => {}
         }
 
         Ok(())
+    }
+
+    fn lower_block_stmt(&mut self, block_stmt: &ast::BlockStmt) -> Result<(), String> {
+        self.resolver.enter_scope();
+
+        for stmt in block_stmt.stmts() {
+            self.lower_stmt(stmt)?;
+        }
+
+        self.resolver.exit_scope();
+        Ok(())
+    }
+
+    fn try_lower_assignment(
+        &mut self,
+        expr: ast::Expr,
+        span: Span,
+    ) -> Result<bool, String> {
+        let assign = match expr {
+            ast::Expr::AssignExpr(assign) => assign,
+            _ => return Ok(false),
+        };
+
+        let lhs_name = simple_assign_lhs_name(&assign)
+            .ok_or("only simple identifier assignments are supported for now")?;
+
+        let defined_symbol = self
+            .resolver
+            .resolve(&lhs_name)
+            .ok_or_else(|| format!("assignment to unknown symbol '{}'", lhs_name))?;
+
+        let rhs = assign.rhs().ok_or("assignment missing rhs")?;
+        let mut uses = self.resolver.collect_expr_uses(rhs);
+
+        if is_compound_assignment(&assign) && !uses.contains(&defined_symbol) {
+            uses.push(defined_symbol);
+        }
+
+        self.builder
+            .build_assignment(span, vec![defined_symbol], uses);
+
+        Ok(true)
     }
 }
 
@@ -130,4 +177,35 @@ fn declarator_init_expr(declarator: &ast::Declarator) -> Option<ast::Expr> {
     } else {
         None
     }
+}
+
+fn simple_assign_lhs_name(assign: &ast::AssignExpr) -> Option<String> {
+    let lhs = assign.lhs()?;
+
+    lhs.syntax()
+        .descendants_with_tokens()
+        .find_map(|elem| match elem {
+            rslint_parser::NodeOrToken::Token(tok) if tok.kind() == SyntaxKind::IDENT => {
+                Some(tok.text().to_string())
+            }
+            _ => None,
+        })
+}
+
+fn is_compound_assignment(assign: &ast::AssignExpr) -> bool {
+    assign
+        .syntax()
+        .children_with_tokens()
+        .find_map(|elem| match elem {
+            rslint_parser::NodeOrToken::Token(tok) => {
+                let text = tok.text();
+                if text.ends_with('=') {
+                    Some(text != "=")
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        })
+        .unwrap_or(false)
 }
