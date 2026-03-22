@@ -270,4 +270,62 @@ impl CfgBuilder {
 
         self.switch_to_block(exit_block);
     }
+
+
+    pub fn build_for<F, G>(
+        &mut self,
+        condition_uses: Option<Vec<SymbolId>>,
+        body_builder: F,
+        update_builder: Option<G>,
+    ) where
+        F: FnOnce(&mut CfgBuilder),
+        G: FnOnce(&mut CfgBuilder),
+    {
+        let condition_block = self.new_block();
+        let body_block = self.new_block();
+        let update_block = self.new_block();
+        let exit_block = self.new_block();
+
+        if self.current_block_is_open() {
+            self.terminate_current(Terminator::Goto(condition_block));
+        }
+
+        self.switch_to_block(condition_block);
+
+        if let Some(cond_uses) = condition_uses {
+            self.terminate_current(Terminator::Branch {
+                cond_uses,
+                then_bb: body_block,
+                else_bb: exit_block,
+            });
+        } else {
+            self.terminate_current(Terminator::Goto(body_block));
+        }
+
+        self.loop_stack.push(LoopContext {
+            break_target: exit_block,
+            continue_target: update_block,
+        });
+
+        self.switch_to_block(body_block);
+        body_builder(self);
+
+        if self.current_block_is_open() {
+            self.terminate_current(Terminator::Goto(update_block));
+        }
+
+        self.switch_to_block(update_block);
+
+        if let Some(build_update) = update_builder {
+            build_update(self);
+        }
+
+        if self.current_block_is_open() {
+            self.terminate_current(Terminator::Goto(condition_block));
+        }
+
+        self.loop_stack.pop();
+
+        self.switch_to_block(exit_block);
+    }
 }

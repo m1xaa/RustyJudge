@@ -47,6 +47,10 @@ impl<'a> AstLowerer<'a> {
                         return Ok(());
                     }
 
+                    if self.try_lower_update_expr(expr.clone(), span)? {
+                        return Ok(());
+                    }
+
                     let uses = self.resolver.collect_expr_uses(expr);
                     self.builder.build_expression_statement(span, uses);
                 }
@@ -65,25 +69,7 @@ impl<'a> AstLowerer<'a> {
 
             ast::Stmt::Decl(decl) => {
                 if let ast::Decl::VarDecl(var_decl) = decl {
-                    let decl_kind: SymbolKind = (&var_decl).into();
-
-                    for child in var_decl.syntax().children() {
-                        if let Some(declarator) = ast::Declarator::cast(child) {
-                            let span = Span::from_node(declarator.syntax());
-
-                            let name = simple_decl_name(&declarator)
-                                .ok_or("expected simple identifier declarator")?;
-
-                            let symbol_id = self.resolver.declare(name, decl_kind, span)?;
-
-                            let uses = declarator_init_expr(&declarator)
-                                .map(|expr| self.resolver.collect_expr_uses(expr))
-                                .unwrap_or_default();
-
-                            self.builder
-                                .build_variable_declaration(span, vec![symbol_id], uses);
-                        }
-                    }
+                    self.lower_var_decl(var_decl)?;
                 }
             }
 
@@ -109,10 +95,157 @@ impl<'a> AstLowerer<'a> {
                 self.lower_if_stmt(&if_stmt)?;
             }
 
+            ast::Stmt::ForStmt(for_stmt) => {
+                self.lower_for_stmt(&for_stmt)?;
+            }
+
             _ => {}
         }
 
         Ok(())
+    }
+
+    fn try_lower_update_expr(
+        &mut self,
+        expr: ast::Expr,
+        span: Span,
+    ) -> Result<bool, String> {
+        let Some(name) = update_target_name(&expr) else {
+            return Ok(false);
+        };
+
+        let symbol_id = self
+            .resolver
+            .resolve(&name)
+            .ok_or_else(|| format!("update of unknown symbol '{}'", name))?;
+
+        self.builder
+            .build_assignment(span, vec![symbol_id], vec![symbol_id]);
+
+        Ok(true)
+    }
+    fn lower_var_decl(&mut self, var_decl: ast::VarDecl) -> Result<(), String> {
+        let decl_kind: SymbolKind = (&var_decl).into();
+
+        for child in var_decl.syntax().children() {
+            if let Some(declarator) = ast::Declarator::cast(child) {
+                let span = Span::from_node(declarator.syntax());
+
+                let name = simple_decl_name(&declarator)
+                    .ok_or("expected simple identifier declarator")?;
+
+                let symbol_id = self.resolver.declare(name, decl_kind, span)?;
+
+                let uses = declarator_init_expr(&declarator)
+                    .map(|expr| self.resolver.collect_expr_uses(expr))
+                    .unwrap_or_default();
+
+                self.builder
+                    .build_variable_declaration(span, vec![symbol_id], uses);
+            }
+        }
+
+        Ok(())
+    }
+
+    fn lower_header_expr(&mut self, expr: ast::Expr, span: Span) -> Result<(), String> {
+        if self.try_lower_assignment(expr.clone(), span)? {
+            return Ok(());
+        }
+
+        if self.try_lower_update_expr(expr.clone(), span)? {
+            return Ok(());
+        }
+
+        let uses = self.resolver.collect_expr_uses(expr);
+        self.builder.build_expression_statement(span, uses);
+        Ok(())
+    }
+
+    fn lower_for_init(&mut self, init: &ast::ForStmtInit) -> Result<(), String> {
+        if let Some(var_decl) = init.syntax().descendants().find_map(ast::VarDecl::cast) {
+            return self.lower_var_decl(var_decl);
+        }
+
+        if let Some(expr) = init.syntax().descendants().find_map(ast::Expr::cast) {
+            return self.lower_header_expr(expr, Span::from_node(init.syntax()));
+        }
+
+        Ok(())
+    }
+
+    fn lower_for_update(&mut self, update: &ast::ForStmtUpdate) -> Result<(), String> {
+        if let Some(expr) = update.syntax().descendants().find_map(ast::Expr::cast) {
+            return self.lower_header_expr(expr, Span::from_node(update.syntax()));
+        }
+
+        Ok(())
+    }
+
+    fn lower_for_stmt(&mut self, for_stmt: &ast::ForStmt) -> Result<(), String> {
+        self.resolver.enter_scope();
+
+        if let Some(init) = for_stmt.init() {
+            self.lower_for_init(&init)?;
+        }
+
+        let condition_uses = for_stmt
+            .test()
+            .and_then(|test| test.syntax().descendants().find_map(ast::Expr::cast))
+            .map(|expr| self.resolver.collect_expr_uses(expr));
+
+        let body_stmt = for_stmt
+            .cons()
+            .ok_or("for statement missing body")?;
+
+        let update = for_stmt.update();
+
+        let resolver = RefCell::new(&mut *self.resolver);
+        let body_result = RefCell::new(Ok(()));
+        let update_result = RefCell::new(Ok(()));
+
+        if let Some(update) = update {
+            self.builder.build_for(
+                condition_uses,
+                |builder| {
+                    let mut resolver_ref = resolver.borrow_mut();
+                    let mut nested = AstLowerer {
+                        resolver: &mut *resolver_ref,
+                        builder,
+                    };
+                    *body_result.borrow_mut() = nested.lower_stmt(body_stmt.clone());
+                },
+                Some(|builder: &mut CfgBuilder| {
+                    let mut resolver_ref = resolver.borrow_mut();
+                    let mut nested = AstLowerer {
+                        resolver: &mut *resolver_ref,
+                        builder,
+                    };
+                    *update_result.borrow_mut() = nested.lower_for_update(&update);
+                }),
+            );
+        } else {
+            self.builder.build_for(
+                condition_uses,
+                |builder| {
+                    let mut resolver_ref = resolver.borrow_mut();
+                    let mut nested = AstLowerer {
+                        resolver: &mut *resolver_ref,
+                        builder,
+                    };
+                    *body_result.borrow_mut() = nested.lower_stmt(body_stmt.clone());
+                },
+                None::<fn(&mut CfgBuilder)>,
+            );
+        }
+
+        let body_outcome = body_result.into_inner();
+        let update_outcome = update_result.into_inner();
+
+        self.resolver.exit_scope();
+
+        body_outcome?;
+        update_outcome
     }
 
     fn lower_if_stmt(&mut self, if_stmt: &ast::IfStmt) -> Result<(), String> {
@@ -309,4 +442,53 @@ fn is_compound_assignment(assign: &ast::AssignExpr) -> bool {
             _ => None,
         })
         .unwrap_or(false)
+}
+
+fn update_target_name(expr: &ast::Expr) -> Option<String> {
+    let text = expr.syntax().text().to_string();
+
+    let is_update = text.starts_with("++")
+        || text.starts_with("--")
+        || text.ends_with("++")
+        || text.ends_with("--");
+
+    if !is_update {
+        return None;
+    }
+
+    expr.syntax()
+        .descendants_with_tokens()
+        .find_map(|elem| match elem {
+            rslint_parser::NodeOrToken::Token(tok) if tok.kind() == SyntaxKind::IDENT => {
+                Some(tok.text().to_string())
+            }
+            _ => None,
+        })
+}
+
+fn unary_update_target_name(expr: &ast::Expr) -> Option<String> {
+    let unary = match expr {
+        ast::Expr::UnaryExpr(unary) => unary,
+        _ => return None,
+    };
+
+    let text = unary.syntax().text().to_string();
+    let is_update = text.starts_with("++")
+        || text.starts_with("--")
+        || text.ends_with("++")
+        || text.ends_with("--");
+
+    if !is_update {
+        return None;
+    }
+
+    unary
+        .syntax()
+        .descendants_with_tokens()
+        .find_map(|elem| match elem {
+            rslint_parser::NodeOrToken::Token(tok) if tok.kind() == SyntaxKind::IDENT => {
+                Some(tok.text().to_string())
+            }
+            _ => None,
+        })
 }
