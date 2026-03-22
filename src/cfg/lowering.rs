@@ -5,21 +5,23 @@ use crate::cfg::resolver::Resolver;
 
 pub fn build_cfg_from_root(root: SyntaxNode) -> Result<Cfg, String> {
     let mut resolver = Resolver::new();
-    let builder = CfgBuilder::new();
+    let mut builder = CfgBuilder::new();
 
-    let mut lowerer = AstLowerer {
-        resolver: &mut resolver,
-        builder,
-    };
+    {
+        let mut lowerer = AstLowerer {
+            resolver: &mut resolver,
+            builder: &mut builder,
+        };
 
-    lowerer.lower_root(&root)?;
+        lowerer.lower_root(&root)?;
+    }
 
-    Ok(lowerer.builder.finish())
+    Ok(builder.finish())
 }
 
 struct AstLowerer<'a> {
     resolver: &'a mut Resolver,
-    builder: CfgBuilder,
+    builder: &'a mut CfgBuilder,
 }
 
 impl<'a> AstLowerer<'a> {
@@ -88,10 +90,47 @@ impl<'a> AstLowerer<'a> {
                 self.lower_block_stmt(&block_stmt)?;
             }
 
+            ast::Stmt::BreakStmt(break_stmt) => {
+                let span = Span::from_node(break_stmt.syntax());
+                self.builder.build_break(span);
+            }
+
+            ast::Stmt::ContinueStmt(continue_stmt) => {
+                let span = Span::from_node(continue_stmt.syntax());
+                self.builder.build_continue(span);
+            }
+
+            ast::Stmt::WhileStmt(while_stmt) => {
+                self.lower_while_stmt(&while_stmt)?;
+            }
+
             _ => {}
         }
 
         Ok(())
+    }
+
+    fn lower_while_stmt(&mut self, while_stmt: &ast::WhileStmt) -> Result<(), String> {
+        let condition_expr = while_stmt
+            .condition()
+            .and_then(|cond| cond.condition())
+            .ok_or("while statement missing condition")?;
+
+        let body_stmt = while_stmt
+            .cons()
+            .ok_or("while statement missing body")?;
+
+        let condition_uses = self.resolver.collect_expr_uses(condition_expr);
+
+        let resolver = &mut *self.resolver;
+        let mut body_result: Result<(), String> = Ok(());
+
+        self.builder.build_while(condition_uses, |builder| {
+            let mut nested = AstLowerer { resolver, builder };
+            body_result = nested.lower_stmt(body_stmt.clone());
+        });
+
+        body_result
     }
 
     fn lower_block_stmt(&mut self, block_stmt: &ast::BlockStmt) -> Result<(), String> {
