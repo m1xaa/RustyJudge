@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use crate::cfg::basic_blocks::{Cfg, Span, SymbolKind};
 use crate::cfg::builder::CfgBuilder;
 use rslint_parser::{ast, AstNode, SyntaxKind, SyntaxNode};
@@ -104,10 +105,71 @@ impl<'a> AstLowerer<'a> {
                 self.lower_while_stmt(&while_stmt)?;
             }
 
+            ast::Stmt::IfStmt(if_stmt) => {
+                self.lower_if_stmt(&if_stmt)?;
+            }
+
             _ => {}
         }
 
         Ok(())
+    }
+
+    fn lower_if_stmt(&mut self, if_stmt: &ast::IfStmt) -> Result<(), String> {
+        let condition_expr = if_stmt
+            .condition()
+            .and_then(|cond| cond.condition())
+            .ok_or("if statement missing condition")?;
+
+        let then_stmt = if_stmt
+            .cons()
+            .ok_or("if statement missing then branch")?;
+
+        let else_stmt = if_stmt.alt();
+
+        let condition_uses = self.resolver.collect_expr_uses(condition_expr);
+
+        let resolver = RefCell::new(&mut *self.resolver);
+        let then_result = RefCell::new(Ok(()));
+        let else_result = RefCell::new(Ok(()));
+
+        if let Some(else_stmt) = else_stmt {
+            self.builder.build_if(
+                condition_uses,
+                |builder| {
+                    let mut resolver_ref = resolver.borrow_mut();
+                    let mut nested = AstLowerer {
+                        resolver: &mut *resolver_ref,
+                        builder,
+                    };
+                    *then_result.borrow_mut() = nested.lower_stmt(then_stmt.clone());
+                },
+                Some(|builder: &mut CfgBuilder| {
+                    let mut resolver_ref = resolver.borrow_mut();
+                    let mut nested = AstLowerer {
+                        resolver: &mut *resolver_ref,
+                        builder,
+                    };
+                    *else_result.borrow_mut() = nested.lower_stmt(else_stmt.clone());
+                }),
+            );
+        } else {
+            self.builder.build_if(
+                condition_uses,
+                |builder| {
+                    let mut resolver_ref = resolver.borrow_mut();
+                    let mut nested = AstLowerer {
+                        resolver: &mut *resolver_ref,
+                        builder,
+                    };
+                    *then_result.borrow_mut() = nested.lower_stmt(then_stmt.clone());
+                },
+                None::<fn(&mut CfgBuilder)>,
+            );
+        }
+
+        then_result.into_inner()?;
+        else_result.into_inner()
     }
 
     fn lower_while_stmt(&mut self, while_stmt: &ast::WhileStmt) -> Result<(), String> {
