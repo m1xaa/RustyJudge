@@ -328,4 +328,52 @@ impl CfgBuilder {
 
         self.switch_to_block(exit_block);
     }
+
+    pub fn build_for_each<F>(
+        &mut self,
+        source_uses: Vec<SymbolId>,
+        target_symbol: SymbolId,
+        assign_span: Span,
+        body_builder: F,
+    ) where
+        F: FnOnce(&mut CfgBuilder),
+    {
+        let header_block = self.new_block();
+        let assign_block = self.new_block();
+        let body_block = self.new_block();
+        let exit_block = self.new_block();
+
+        if self.current_block_is_open() {
+            self.terminate_current(Terminator::Goto(header_block));
+        }
+
+        self.switch_to_block(header_block);
+        self.terminate_current(Terminator::Branch {
+            cond_uses: source_uses,
+            then_bb: assign_block,
+            else_bb: exit_block,
+        });
+
+        self.loop_stack.push(LoopContext {
+            break_target: exit_block,
+            continue_target: header_block,
+        });
+
+        self.switch_to_block(assign_block);
+        self.build_assignment(assign_span, vec![target_symbol], vec![]);
+
+        if self.current_block_is_open() {
+            self.terminate_current(Terminator::Goto(body_block));
+        }
+
+        self.switch_to_block(body_block);
+        body_builder(self);
+
+        if self.current_block_is_open() {
+            self.terminate_current(Terminator::Goto(header_block));
+        }
+
+        self.loop_stack.pop();
+        self.switch_to_block(exit_block);
+    }
 }

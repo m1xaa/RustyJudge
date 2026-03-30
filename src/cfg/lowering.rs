@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use crate::cfg::basic_blocks::{Cfg, Span, SymbolKind};
+use crate::cfg::basic_blocks::{Cfg, Span, SymbolId, SymbolKind};
 use crate::cfg::builder::CfgBuilder;
 use rslint_parser::{ast, AstNode, SyntaxKind, SyntaxNode};
 use crate::cfg::resolver::Resolver;
@@ -30,8 +30,17 @@ impl<'a> AstLowerer<'a> {
         let script = ast::Script::cast(root.clone())
             .ok_or("root is not a Script node")?;
 
-        for stmt in script.items() {
-            self.lower_stmt(stmt)?;
+        for child in script.syntax().children() {
+            if child.kind() == SyntaxKind::FOR_OF_STMT {
+                let for_of_stmt = ast::ForOfStmt::cast(child.clone())
+                    .ok_or("failed to cast FOR_OF_STMT")?;
+                self.lower_for_of_stmt(&for_of_stmt)?;
+                continue;
+            }
+
+            if let Some(stmt) = ast::Stmt::cast(child.clone()) {
+                self.lower_stmt(stmt)?;
+            }
         }
 
         Ok(())
@@ -99,10 +108,132 @@ impl<'a> AstLowerer<'a> {
                 self.lower_for_stmt(&for_stmt)?;
             }
 
+            ast::Stmt::ForInStmt(for_in_stmt) => {
+                self.lower_for_in_stmt(&for_in_stmt)?;
+            }
+
             _ => {}
         }
 
         Ok(())
+    }
+
+    fn lower_for_in_stmt(&mut self, for_in_stmt: &ast::ForInStmt) -> Result<(), String> {
+        let left_syntax = for_in_stmt
+            .left()
+            .ok_or("for-in statement missing left side")?
+            .syntax()
+            .clone();
+
+        let right_expr = for_in_stmt
+            .right()
+            .ok_or("for-in statement missing right side")?;
+
+        let body_stmt = for_in_stmt
+            .cons()
+            .ok_or("for-in statement missing body")?;
+
+        self.lower_for_each_loop(
+            left_syntax,
+            right_expr,
+            body_stmt,
+        )
+    }
+
+    fn lower_for_of_stmt(&mut self, for_of_stmt: &ast::ForOfStmt) -> Result<(), String> {
+        let left_syntax = for_of_stmt
+            .left()
+            .ok_or("for-of statement missing left side")?
+            .syntax()
+            .clone();
+
+        let right_expr = for_of_stmt
+            .right()
+            .ok_or("for-of statement missing right side")?;
+
+        let body_stmt = for_of_stmt
+            .cons()
+            .ok_or("for-of statement missing body")?;
+
+        self.lower_for_each_loop(
+            left_syntax,
+            right_expr,
+            body_stmt,
+        )
+    }
+
+    fn lower_for_each_loop(
+        &mut self,
+        left_syntax: SyntaxNode,
+        right_expr: ast::Expr,
+        body_stmt: ast::Stmt,
+    ) -> Result<(), String> {
+        self.resolver.enter_scope();
+
+        let target_symbol = self.lower_for_each_left_from_syntax(&left_syntax)?;
+        let source_uses = self.resolver.collect_expr_uses(right_expr);
+        let assign_span = Span::from_node(&left_syntax);
+
+        let resolver = RefCell::new(&mut *self.resolver);
+        let body_result = RefCell::new(Ok(()));
+
+        self.builder.build_for_each(
+            source_uses,
+            target_symbol,
+            assign_span,
+            |builder| {
+                let mut resolver_ref = resolver.borrow_mut();
+                let mut nested = AstLowerer {
+                    resolver: &mut *resolver_ref,
+                    builder,
+                };
+                *body_result.borrow_mut() = nested.lower_stmt(body_stmt.clone());
+            },
+        );
+
+        let out = body_result.into_inner();
+        self.resolver.exit_scope();
+        out
+    }
+
+    fn lower_for_each_left_from_syntax(
+        &mut self,
+        left_syntax: &SyntaxNode,
+    ) -> Result<SymbolId, String> {
+        if let Some(var_decl) = left_syntax.descendants().find_map(ast::VarDecl::cast) {
+            let decl_kind: SymbolKind = (&var_decl).into();
+
+            let declarator = var_decl
+                .syntax()
+                .children()
+                .find_map(ast::Declarator::cast)
+                .ok_or("expected declarator in for-each left side")?;
+
+            let span = Span::from_node(declarator.syntax());
+
+            let name = simple_decl_name(&declarator)
+                .ok_or("only simple identifier loop targets are supported for now")?;
+
+            let symbol_id = self.resolver.declare(name, decl_kind, span)?;
+            self.builder
+                .build_variable_declaration(span, vec![symbol_id], vec![]);
+
+            return Ok(symbol_id);
+        }
+
+        if let Some(expr) = left_syntax.descendants().find_map(ast::Expr::cast) {
+            let name = simple_expr_name(&expr)
+                .ok_or("only simple identifier loop targets are supported for now")?;
+
+            let symbol_id = self
+                .resolver
+                .resolve(&name)
+                .ok_or_else(|| format!("for-each target '{}' is not declared", name))?;
+
+            return Ok(symbol_id);
+        }
+
+        Err("unsupported for-each left side".to_string())
     }
 
     fn try_lower_update_expr(
@@ -484,6 +615,17 @@ fn unary_update_target_name(expr: &ast::Expr) -> Option<String> {
 
     unary
         .syntax()
+        .descendants_with_tokens()
+        .find_map(|elem| match elem {
+            rslint_parser::NodeOrToken::Token(tok) if tok.kind() == SyntaxKind::IDENT => {
+                Some(tok.text().to_string())
+            }
+            _ => None,
+        })
+}
+
+fn simple_expr_name(expr: &ast::Expr) -> Option<String> {
+    expr.syntax()
         .descendants_with_tokens()
         .find_map(|elem| match elem {
             rslint_parser::NodeOrToken::Token(tok) if tok.kind() == SyntaxKind::IDENT => {
