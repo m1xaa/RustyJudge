@@ -3,8 +3,10 @@ use crate::cfg::basic_blocks::{Cfg, Span, SymbolId, SymbolKind};
 use crate::cfg::builder::CfgBuilder;
 use rslint_parser::{ast, AstNode, SyntaxKind, SyntaxNode};
 use crate::cfg::resolver::Resolver;
+use crate::cfg::semantic::SemanticModel;
+use crate::compute_liveness;
 
-pub fn build_cfg_from_root(root: SyntaxNode) -> Result<Cfg, String> {
+pub fn build_semantic_model_from_root(root: SyntaxNode) -> Result<SemanticModel, String> {
     let mut resolver = Resolver::new();
     let mut builder = CfgBuilder::new();
 
@@ -17,7 +19,15 @@ pub fn build_cfg_from_root(root: SyntaxNode) -> Result<Cfg, String> {
         lowerer.lower_root(&root)?;
     }
 
-    Ok(builder.finish())
+    let cfg = builder.finish();
+    let liveness = compute_liveness(&cfg);
+    let symbols = resolver.symbol_table().clone();
+
+    Ok(SemanticModel {
+        cfg,
+        symbols,
+        liveness,
+    })
 }
 
 struct AstLowerer<'a> {

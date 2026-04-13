@@ -9,11 +9,13 @@ pub struct LivenessResult {
     pub block_def: Vec<HashSet<SymbolId>>,
     pub live_in: Vec<HashSet<SymbolId>>,
     pub live_out: Vec<HashSet<SymbolId>>,
+    pub stmt_live_in: Vec<Vec<HashSet<SymbolId>>>,
+    pub stmt_live_out: Vec<Vec<HashSet<SymbolId>>>,
 }
 
 pub fn compute_liveness(cfg: &Cfg) -> LivenessResult {
     let reachable = compute_reachable_blocks(cfg);
-    let (block_use, block_def) = compute_block_use_def(cfg, &reachable);
+    let (block_use, block_def) = compute_block_use_def(cfg);
 
     let mut live_in = vec![HashSet::new(); cfg.blocks.len()];
     let mut live_out = vec![HashSet::new(); cfg.blocks.len()];
@@ -52,12 +54,16 @@ pub fn compute_liveness(cfg: &Cfg) -> LivenessResult {
         }
     }
 
+    let (stmt_live_in, stmt_live_out) = compute_statement_liveness(cfg, &live_out);
+
     LivenessResult {
         reachable,
         block_use,
         block_def,
         live_in,
         live_out,
+        stmt_live_in,
+        stmt_live_out,
     }
 }
 
@@ -82,17 +88,12 @@ pub fn compute_reachable_blocks(cfg: &Cfg) -> HashSet<BlockId> {
 
 pub fn compute_block_use_def(
     cfg: &Cfg,
-    reachable: &HashSet<BlockId>,
 ) -> (Vec<HashSet<SymbolId>>, Vec<HashSet<SymbolId>>) {
     let mut block_use = vec![HashSet::new(); cfg.blocks.len()];
     let mut block_def = vec![HashSet::new(); cfg.blocks.len()];
 
     for block in &cfg.blocks {
         let block_id = block.id;
-
-        if !reachable.contains(&block_id) {
-            continue;
-        }
 
         let mut uses = HashSet::new();
         let mut defs = HashSet::new();
@@ -134,6 +135,65 @@ pub fn compute_block_use_def(
     (block_use, block_def)
 }
 
+pub fn compute_statement_liveness(
+    cfg: &Cfg,
+    live_out: &[HashSet<SymbolId>],
+) -> (Vec<Vec<HashSet<SymbolId>>>, Vec<Vec<HashSet<SymbolId>>>) {
+    let mut stmt_live_in = vec![Vec::new(); cfg.blocks.len()];
+    let mut stmt_live_out = vec![Vec::new(); cfg.blocks.len()];
+
+    for block in &cfg.blocks {
+        let block_id = block.id;
+        let stmt_count = block.statements.len();
+
+        let mut in_sets = vec![HashSet::new(); stmt_count];
+        let mut out_sets = vec![HashSet::new(); stmt_count];
+
+        let mut current_live = live_out[block_id].clone();
+        current_live.extend(terminator_uses(&block.terminator));
+
+        for index in (0..stmt_count).rev() {
+            let stmt = &block.statements[index];
+
+            out_sets[index] = current_live.clone();
+
+            let mut before = current_live.clone();
+
+            for def in &stmt.defines {
+                before.remove(def);
+            }
+
+            for used in &stmt.uses {
+                before.insert(*used);
+            }
+
+            in_sets[index] = before.clone();
+            current_live = before;
+        }
+
+        stmt_live_in[block_id] = in_sets;
+        stmt_live_out[block_id] = out_sets;
+    }
+
+    (stmt_live_in, stmt_live_out)
+}
+
+fn terminator_uses(terminator: &Terminator) -> HashSet<SymbolId> {
+    let mut uses = HashSet::new();
+
+    match terminator {
+        Terminator::Branch { cond_uses, .. } => {
+            uses.extend(cond_uses.iter().copied());
+        }
+        Terminator::Return { value_uses } => {
+            uses.extend(value_uses.iter().copied());
+        }
+        Terminator::Goto(_) | Terminator::Unset | Terminator::Exit => {}
+    }
+
+    uses
+}
+
 pub fn sorted_symbols(set: &HashSet<SymbolId>) -> Vec<SymbolId> {
     let mut v: Vec<_> = set.iter().copied().collect();
     v.sort_unstable();
@@ -150,5 +210,28 @@ pub fn print_liveness(cfg: &Cfg, result: &LivenessResult) {
         println!("  def: {:?}", sorted_symbols(&result.block_def[id]));
         println!("  live_in: {:?}", sorted_symbols(&result.live_in[id]));
         println!("  live_out: {:?}", sorted_symbols(&result.live_out[id]));
+    }
+}
+
+pub fn print_statement_liveness(cfg: &Cfg, result: &LivenessResult) {
+    for block in &cfg.blocks {
+        println!("block {}", block.id);
+
+        for (index, stmt) in block.statements.iter().enumerate() {
+            println!(
+                "  stmt {} (id={}, kind={:?})",
+                index,
+                stmt.id,
+                stmt.kind
+            );
+            println!(
+                "    stmt_live_in: {:?}",
+                sorted_symbols(&result.stmt_live_in[block.id][index])
+            );
+            println!(
+                "    stmt_live_out: {:?}",
+                sorted_symbols(&result.stmt_live_out[block.id][index])
+            );
+        }
     }
 }

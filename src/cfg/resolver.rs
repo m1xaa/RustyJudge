@@ -3,7 +3,7 @@ use rslint_parser::{AstNode, SyntaxNode};
 use rslint_parser::ast;
 use crate::cfg::basic_blocks::{Span, Symbol, SymbolId, SymbolKind};
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct SymbolTable {
     pub symbols: Vec<Symbol>,
 }
