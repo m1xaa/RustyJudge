@@ -57,6 +57,12 @@ impl<'a> AstLowerer<'a> {
     }
 
     fn lower_stmt(&mut self, stmt: ast::Stmt) -> Result<(), String> {
+        if stmt.syntax().kind() == SyntaxKind::FOR_OF_STMT {
+            let for_of_stmt = ast::ForOfStmt::cast(stmt.syntax().clone())
+                .ok_or("failed to cast FOR_OF_STMT")?;
+            return self.lower_for_of_stmt(&for_of_stmt);
+        }
+        
         match stmt {
             ast::Stmt::ExprStmt(expr_stmt) => {
                 if let Some(expr) = expr_stmt.expr() {
@@ -226,7 +232,7 @@ impl<'a> AstLowerer<'a> {
 
             let symbol_id = self.resolver.declare(name, decl_kind, span)?;
             self.builder
-                .build_variable_declaration(span, vec![symbol_id], vec![]);
+                .build_variable_declaration(span, vec![symbol_id], vec![], false);
 
             return Ok(symbol_id);
         }
@@ -260,8 +266,7 @@ impl<'a> AstLowerer<'a> {
             .resolve(&name)
             .ok_or_else(|| format!("update of unknown symbol '{}'", name))?;
 
-        self.builder
-            .build_assignment(span, vec![symbol_id], vec![symbol_id]);
+        self.builder.build_update(span, symbol_id);
 
         Ok(true)
     }
@@ -277,12 +282,19 @@ impl<'a> AstLowerer<'a> {
 
                 let symbol_id = self.resolver.declare(name, decl_kind, span)?;
 
-                let uses = declarator_init_expr(&declarator)
+                let init_expr = declarator_init_expr(&declarator);
+                let has_initializer = init_expr.is_some();
+
+                let uses = init_expr
                     .map(|expr| self.resolver.collect_expr_uses(expr))
                     .unwrap_or_default();
 
-                self.builder
-                    .build_variable_declaration(span, vec![symbol_id], uses);
+                self.builder.build_variable_declaration(
+                    span,
+                    vec![symbol_id],
+                    uses,
+                    has_initializer,
+                );
             }
         }
 

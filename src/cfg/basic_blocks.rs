@@ -40,10 +40,30 @@ pub struct StatementInfo {
     pub uses: Vec<SymbolId>,
 }
 
-#[derive(Debug, Clone)]
+impl StatementInfo {
+    pub fn has_initializer(&self) -> bool {
+        matches!(self.kind, StatementKind::VarDecl { has_initializer: true })
+    }
+
+    pub fn is_var_decl(&self) -> bool {
+        matches!(self.kind, StatementKind::VarDecl { .. })
+    }
+
+    pub fn is_write_like(&self) -> bool {
+        matches!(
+            self.kind,
+            StatementKind::Assign
+                | StatementKind::Update
+                | StatementKind::VarDecl { has_initializer: true }
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StatementKind {
-    VarDecl,
+    VarDecl { has_initializer: bool },
     Assign,
+    Update,
     Expr,
     Return,
     Break,

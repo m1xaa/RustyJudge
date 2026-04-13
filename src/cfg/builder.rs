@@ -135,13 +135,18 @@ impl CfgBuilder {
         span: Span,
         defines: Vec<SymbolId>,
         uses: Vec<SymbolId>,
+        has_initializer: bool,
     ) {
-        self.push_statement(
-            StatementKind::VarDecl,
+        let stmt = StatementInfo {
+            id: self.next_statement_id,
+            kind: StatementKind::VarDecl { has_initializer },
             span,
             defines,
             uses,
-        );
+        };
+
+        self.next_statement_id += 1;
+        self.cfg.blocks[self.current].statements.push(stmt);
     }
 
     pub fn build_assignment(
@@ -156,6 +161,19 @@ impl CfgBuilder {
             defines,
             uses,
         );
+    }
+
+    pub fn build_update(&mut self, span: Span, symbol_id: SymbolId) {
+        let stmt = StatementInfo {
+            id: self.next_statement_id,
+            kind: StatementKind::Update,
+            span,
+            defines: vec![symbol_id],
+            uses: vec![symbol_id],
+        };
+
+        self.next_statement_id += 1;
+        self.cfg.blocks[self.current].statements.push(stmt);
     }
 
     pub fn build_if<F, G>(
