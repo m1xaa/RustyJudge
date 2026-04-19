@@ -1,4 +1,5 @@
 use crate::cfg::basic_blocks::{BasicBlock, BlockId, Cfg, Span, StatementId, StatementInfo, StatementKind, SymbolId, Terminator};
+use crate::cfg::liveness::compute_reachable_blocks;
 
 pub struct CfgBuilder {
     cfg: Cfg,
@@ -90,7 +91,7 @@ impl CfgBuilder {
             self.terminate_current(Terminator::Goto(self.cfg.exit));
         }
 
-        self.cfg
+        prune_unreachable_empty_blocks(self.cfg)
     }
 
     fn push_statement(&mut self, kind: StatementKind, span: Span, defines: Vec<SymbolId>, uses: Vec<SymbolId>) {
@@ -187,7 +188,6 @@ impl CfgBuilder {
     {
         let then_block = self.new_block();
         let else_block = self.new_block();
-        let join_block = self.new_block();
 
         self.terminate_current(Terminator::Branch {
             cond_uses: condition_uses,
@@ -197,19 +197,34 @@ impl CfgBuilder {
 
         self.switch_to_block(then_block);
         then_builder(self);
-        if self.current_block_is_open() {
-            self.terminate_current(Terminator::Goto(join_block));
-        }
+        let then_end = self.current;
+        let then_open = self.current_block_is_open();
 
         self.switch_to_block(else_block);
         if let Some(build_else_branch) = else_builder {
             build_else_branch(self);
         }
-        if self.current_block_is_open() {
-            self.terminate_current(Terminator::Goto(join_block));
-        }
+        let else_end = self.current;
+        let else_open = self.current_block_is_open();
 
-        self.switch_to_block(join_block);
+        if then_open || else_open {
+            let join_block = self.new_block();
+
+            if then_open {
+                self.switch_to_block(then_end);
+                self.terminate_current(Terminator::Goto(join_block));
+            }
+
+            if else_open {
+                self.switch_to_block(else_end);
+                self.terminate_current(Terminator::Goto(join_block));
+            }
+
+            self.switch_to_block(join_block);
+        } else {
+            let dead_continuation = self.new_block();
+            self.switch_to_block(dead_continuation);
+        }
     }
 
     pub fn build_break(&mut self, span: Span) {
@@ -301,7 +316,12 @@ impl CfgBuilder {
     {
         let condition_block = self.new_block();
         let body_block = self.new_block();
-        let update_block = self.new_block();
+        let has_update = update_builder.is_some();
+        let update_block = if has_update {
+            self.new_block()
+        } else {
+            condition_block
+        };
         let exit_block = self.new_block();
 
         if self.current_block_is_open() {
@@ -332,14 +352,13 @@ impl CfgBuilder {
             self.terminate_current(Terminator::Goto(update_block));
         }
 
-        self.switch_to_block(update_block);
-
         if let Some(build_update) = update_builder {
+            self.switch_to_block(update_block);
             build_update(self);
-        }
 
-        if self.current_block_is_open() {
-            self.terminate_current(Terminator::Goto(condition_block));
+            if self.current_block_is_open() {
+                self.terminate_current(Terminator::Goto(condition_block));
+            }
         }
 
         self.loop_stack.pop();
@@ -357,7 +376,6 @@ impl CfgBuilder {
         F: FnOnce(&mut CfgBuilder),
     {
         let header_block = self.new_block();
-        let assign_block = self.new_block();
         let body_block = self.new_block();
         let exit_block = self.new_block();
 
@@ -368,7 +386,7 @@ impl CfgBuilder {
         self.switch_to_block(header_block);
         self.terminate_current(Terminator::Branch {
             cond_uses: source_uses,
-            then_bb: assign_block,
+            then_bb: body_block,
             else_bb: exit_block,
         });
 
@@ -377,14 +395,10 @@ impl CfgBuilder {
             continue_target: header_block,
         });
 
-        self.switch_to_block(assign_block);
+        self.switch_to_block(body_block);
+
         self.build_assignment(assign_span, vec![target_symbol], vec![]);
 
-        if self.current_block_is_open() {
-            self.terminate_current(Terminator::Goto(body_block));
-        }
-
-        self.switch_to_block(body_block);
         body_builder(self);
 
         if self.current_block_is_open() {
@@ -392,6 +406,94 @@ impl CfgBuilder {
         }
 
         self.loop_stack.pop();
+
         self.switch_to_block(exit_block);
+    }
+}
+
+fn prune_unreachable_empty_blocks(cfg: Cfg) -> Cfg {
+    let reachable = compute_reachable_blocks(&cfg);
+
+    let mut keep = vec![true; cfg.blocks.len()];
+
+    for block in &cfg.blocks {
+        if block.id == cfg.entry || block.id == cfg.exit {
+            continue;
+        }
+
+        if !reachable.contains(&block.id) && block.statements.is_empty() {
+            keep[block.id] = false;
+        }
+    }
+
+    if keep.iter().all(|&k| k) {
+        return cfg;
+    }
+
+    let mut remap = vec![usize::MAX; cfg.blocks.len()];
+    let mut new_blocks = Vec::new();
+
+    for block in &cfg.blocks {
+        if keep[block.id] {
+            let new_id = new_blocks.len();
+            remap[block.id] = new_id;
+
+            new_blocks.push(BasicBlock {
+                id: new_id,
+                statements: block.statements.clone(),
+                terminator: block.terminator.clone(),
+                predecessors: Vec::new(),
+            });
+        }
+    }
+
+    for block in &mut new_blocks {
+        block.terminator = remap_terminator(&block.terminator, &remap);
+    }
+
+    for old_block in &cfg.blocks {
+        if !keep[old_block.id] {
+            continue;
+        }
+
+        let new_id = remap[old_block.id];
+
+        new_blocks[new_id].predecessors = old_block
+            .predecessors
+            .iter()
+            .filter_map(|&pred| {
+                if keep[pred] {
+                    Some(remap[pred])
+                } else {
+                    None
+                }
+            })
+            .collect();
+    }
+
+    Cfg {
+        entry: remap[cfg.entry],
+        exit: remap[cfg.exit],
+        blocks: new_blocks,
+    }
+}
+
+fn remap_terminator(term: &Terminator, remap: &[BlockId]) -> Terminator {
+    match term {
+        Terminator::Goto(target) => Terminator::Goto(remap[*target]),
+        Terminator::Branch {
+            cond_uses,
+            then_bb,
+            else_bb,
+        } => Terminator::Branch {
+            cond_uses: cond_uses.clone(),
+            then_bb: remap[*then_bb],
+            else_bb: remap[*else_bb],
+        },
+        Terminator::Return { value_uses } => Terminator::Return {
+            value_uses: value_uses.clone(),
+        },
+        Terminator::Unset => Terminator::Unset,
+        Terminator::Exit => Terminator::Exit,
     }
 }

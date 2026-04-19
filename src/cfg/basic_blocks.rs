@@ -20,11 +20,11 @@ pub struct BasicBlock {
 }
 
 impl BasicBlock {
-    pub fn successors(&self) -> Vec<BlockId> {
+    pub fn successors(&self, exit: BlockId) -> Vec<BlockId> {
         match &self.terminator {
             Terminator::Goto(target) => vec![*target],
             Terminator::Branch { then_bb, else_bb, .. } => vec![*then_bb, *else_bb],
-            Terminator::Return { .. } => vec![],
+            Terminator::Return { .. } => vec![exit],
             Terminator::Unset => vec![],
             Terminator::Exit => vec![],
         }

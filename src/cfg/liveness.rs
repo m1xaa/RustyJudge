@@ -33,7 +33,7 @@ pub fn compute_liveness(cfg: &Cfg) -> LivenessResult {
             }
 
             let mut new_live_out = HashSet::new();
-            for succ in block.successors() {
+            for succ in block.successors(cfg.exit) {
                 if reachable.contains(&succ) {
                     new_live_out.extend(live_in[succ].iter().copied());
                 }
@@ -78,7 +78,7 @@ pub fn compute_reachable_blocks(cfg: &Cfg) -> HashSet<BlockId> {
             continue;
         }
 
-        for succ in cfg.blocks[block_id].successors() {
+        for succ in cfg.blocks[block_id].successors(cfg.exit) {
             queue.push_back(succ);
         }
     }
