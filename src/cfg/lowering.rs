@@ -556,14 +556,25 @@ impl<'a> AstLowerer<'a> {
     fn lower_block_stmt(&mut self, block_stmt: &ast::BlockStmt) -> Result<(), String> {
         self.resolver.enter_scope();
 
-        let statements: Vec<ast::Stmt> = block_stmt.stmts().collect();
+        let children: Vec<SyntaxNode> = block_stmt.syntax().children().collect();
 
-        for stmt in &statements {
-            self.predeclare_function_decl_in_stmt(stmt)?;
+        for child in &children {
+            if let Some(stmt) = ast::Stmt::cast(child.clone()) {
+                self.predeclare_function_decl_in_stmt(&stmt)?;
+            }
         }
 
-        for stmt in statements {
-            self.lower_stmt(stmt)?;
+        for child in children {
+            if child.kind() == SyntaxKind::FOR_OF_STMT {
+                let for_of_stmt = ast::ForOfStmt::cast(child.clone())
+                    .ok_or("failed to cast FOR_OF_STMT")?;
+                self.lower_for_of_stmt(&for_of_stmt)?;
+                continue;
+            }
+
+            if let Some(stmt) = ast::Stmt::cast(child.clone()) {
+                self.lower_stmt(stmt)?;
+            }
         }
 
         self.resolver.exit_scope();
