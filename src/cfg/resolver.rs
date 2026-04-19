@@ -75,6 +75,13 @@ impl Resolver {
         None
     }
 
+    pub fn is_declared_in_current_scope(&self, name: &str) -> bool {
+        self.scopes
+            .last()
+            .map(|scope| scope.bindings.contains_key(name))
+            .unwrap_or(false)
+    }
+
     pub fn symbol_table(&self) -> &SymbolTable {
         &self.symbol_table
     }
@@ -86,6 +93,10 @@ impl Resolver {
     }
 
     fn collect_expr_uses_into(&self, node: &SyntaxNode, uses: &mut Vec<SymbolId>) {
+        if ast::FnExpr::cast(node.clone()).is_some() || ast::ArrowExpr::cast(node.clone()).is_some() {
+            return;
+        }
+
         if let Some(name_ref) = ast::NameRef::cast(node.clone()) {
             let name = name_ref.syntax().text().to_string();
 

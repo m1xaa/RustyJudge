@@ -56,11 +56,11 @@ impl RuleContext {
     }
 
     pub fn cfg(&self) -> Option<&crate::cfg::basic_blocks::Cfg> {
-        self.semantic.as_ref().map(|s| &s.cfg)
+        self.semantic.as_ref().map(|s| s.script_cfg())
     }
 
     pub fn liveness(&self) -> Option<&crate::cfg::liveness::LivenessResult> {
-        self.semantic.as_ref().map(|s| &s.liveness)
+        self.semantic.as_ref().map(|s| s.script_liveness())
     }
 
     pub fn symbol_name(&self, id: crate::cfg::basic_blocks::SymbolId) -> Option<&str> {

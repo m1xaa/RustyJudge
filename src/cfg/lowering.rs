@@ -1,44 +1,57 @@
 use std::cell::RefCell;
-use crate::cfg::basic_blocks::{Cfg, Span, SymbolId, SymbolKind};
+
+use crate::cfg::basic_blocks::{Span, SymbolId, SymbolKind};
 use crate::cfg::builder::CfgBuilder;
-use rslint_parser::{ast, AstNode, SyntaxKind, SyntaxNode};
 use crate::cfg::resolver::Resolver;
-use crate::cfg::semantic::SemanticModel;
+use crate::cfg::semantic::{BodyAnalysis, FunctionAnalysis, SemanticModel};
 use crate::compute_liveness;
+use rslint_parser::{ast, AstNode, NodeOrToken, SyntaxKind, SyntaxNode};
 
 pub fn build_semantic_model_from_root(root: SyntaxNode) -> Result<SemanticModel, String> {
     let mut resolver = Resolver::new();
     let mut builder = CfgBuilder::new();
+    let mut functions = Vec::new();
 
     {
         let mut lowerer = AstLowerer {
             resolver: &mut resolver,
             builder: &mut builder,
+            functions: &mut functions,
         };
 
         lowerer.lower_root(&root)?;
     }
 
-    let cfg = builder.finish();
-    let liveness = compute_liveness(&cfg);
+    let script_cfg = builder.finish();
+    let script_liveness = compute_liveness(&script_cfg);
     let symbols = resolver.symbol_table().clone();
 
     Ok(SemanticModel {
-        cfg,
+        script: BodyAnalysis {
+            cfg: script_cfg,
+            liveness: script_liveness,
+        },
+        functions,
         symbols,
-        liveness,
     })
 }
 
 struct AstLowerer<'a> {
     resolver: &'a mut Resolver,
     builder: &'a mut CfgBuilder,
+    functions: &'a mut Vec<FunctionAnalysis>,
 }
 
 impl<'a> AstLowerer<'a> {
     fn lower_root(&mut self, root: &SyntaxNode) -> Result<(), String> {
         let script = ast::Script::cast(root.clone())
             .ok_or("root is not a Script node")?;
+
+        for child in script.syntax().children() {
+            if let Some(stmt) = ast::Stmt::cast(child.clone()) {
+                self.predeclare_function_decl_in_stmt(&stmt)?;
+            }
+        }
 
         for child in script.syntax().children() {
             if child.kind() == SyntaxKind::FOR_OF_STMT {
@@ -62,7 +75,11 @@ impl<'a> AstLowerer<'a> {
                 .ok_or("failed to cast FOR_OF_STMT")?;
             return self.lower_for_of_stmt(&for_of_stmt);
         }
-        
+
+        if self.lower_function_decl_in_stmt(&stmt)? {
+            return Ok(());
+        }
+
         match stmt {
             ast::Stmt::ExprStmt(expr_stmt) => {
                 if let Some(expr) = expr_stmt.expr() {
@@ -76,6 +93,8 @@ impl<'a> AstLowerer<'a> {
                         return Ok(());
                     }
 
+                    self.lower_functions_in_expr(&expr, None, None)?;
+
                     let uses = self.resolver.collect_expr_uses(expr);
                     self.builder.build_expression_statement(span, uses);
                 }
@@ -84,10 +103,12 @@ impl<'a> AstLowerer<'a> {
             ast::Stmt::ReturnStmt(ret) => {
                 let span = Span::from_node(ret.syntax());
 
-                let uses = ret
-                    .value()
-                    .map(|expr| self.resolver.collect_expr_uses(expr))
-                    .unwrap_or_default();
+                let uses = if let Some(expr) = ret.value() {
+                    self.lower_functions_in_expr(&expr, None, None)?;
+                    self.resolver.collect_expr_uses(expr)
+                } else {
+                    Vec::new()
+                };
 
                 self.builder.build_return(span, uses);
             }
@@ -187,10 +208,12 @@ impl<'a> AstLowerer<'a> {
         self.resolver.enter_scope();
 
         let target_symbol = self.lower_for_each_left_from_syntax(&left_syntax)?;
+        self.lower_functions_in_expr(&right_expr, None, None)?;
         let source_uses = self.resolver.collect_expr_uses(right_expr);
         let assign_span = Span::from_node(&left_syntax);
 
         let resolver = RefCell::new(&mut *self.resolver);
+        let functions = RefCell::new(&mut *self.functions);
         let body_result = RefCell::new(Ok(()));
 
         self.builder.build_for_each(
@@ -199,10 +222,14 @@ impl<'a> AstLowerer<'a> {
             assign_span,
             |builder| {
                 let mut resolver_ref = resolver.borrow_mut();
+                let mut functions_ref = functions.borrow_mut();
+
                 let mut nested = AstLowerer {
                     resolver: &mut *resolver_ref,
                     builder,
+                    functions: &mut *functions_ref,
                 };
+
                 *body_result.borrow_mut() = nested.lower_stmt(body_stmt.clone());
             },
         );
@@ -280,10 +307,14 @@ impl<'a> AstLowerer<'a> {
                 let name = simple_decl_name(&declarator)
                     .ok_or("expected simple identifier declarator")?;
 
-                let symbol_id = self.resolver.declare(name, decl_kind, span)?;
+                let symbol_id = self.resolver.declare(name.clone(), decl_kind, span)?;
 
                 let init_expr = declarator_init_expr(&declarator);
                 let has_initializer = init_expr.is_some();
+
+                if let Some(expr) = init_expr.clone() {
+                    self.lower_functions_in_expr(&expr, Some(name.clone()), Some(symbol_id))?;
+                }
 
                 let uses = init_expr
                     .map(|expr| self.resolver.collect_expr_uses(expr))
@@ -309,6 +340,8 @@ impl<'a> AstLowerer<'a> {
         if self.try_lower_update_expr(expr.clone(), span)? {
             return Ok(());
         }
+
+        self.lower_functions_in_expr(&expr, None, None)?;
 
         let uses = self.resolver.collect_expr_uses(expr);
         self.builder.build_expression_statement(span, uses);
@@ -342,10 +375,16 @@ impl<'a> AstLowerer<'a> {
             self.lower_for_init(&init)?;
         }
 
-        let condition_uses = for_stmt
-            .test()
-            .and_then(|test| test.syntax().descendants().find_map(ast::Expr::cast))
-            .map(|expr| self.resolver.collect_expr_uses(expr));
+        let condition_uses = if let Some(test) = for_stmt.test() {
+            if let Some(expr) = test.syntax().descendants().find_map(ast::Expr::cast) {
+                self.lower_functions_in_expr(&expr, None, None)?;
+                Some(self.resolver.collect_expr_uses(expr))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
 
         let body_stmt = for_stmt
             .cons()
@@ -354,6 +393,7 @@ impl<'a> AstLowerer<'a> {
         let update = for_stmt.update();
 
         let resolver = RefCell::new(&mut *self.resolver);
+        let functions = RefCell::new(&mut *self.functions);
         let body_result = RefCell::new(Ok(()));
         let update_result = RefCell::new(Ok(()));
 
@@ -362,18 +402,26 @@ impl<'a> AstLowerer<'a> {
                 condition_uses,
                 |builder| {
                     let mut resolver_ref = resolver.borrow_mut();
+                    let mut functions_ref = functions.borrow_mut();
+
                     let mut nested = AstLowerer {
                         resolver: &mut *resolver_ref,
                         builder,
+                        functions: &mut *functions_ref,
                     };
+
                     *body_result.borrow_mut() = nested.lower_stmt(body_stmt.clone());
                 },
                 Some(|builder: &mut CfgBuilder| {
                     let mut resolver_ref = resolver.borrow_mut();
+                    let mut functions_ref = functions.borrow_mut();
+
                     let mut nested = AstLowerer {
                         resolver: &mut *resolver_ref,
                         builder,
+                        functions: &mut *functions_ref,
                     };
+
                     *update_result.borrow_mut() = nested.lower_for_update(&update);
                 }),
             );
@@ -382,10 +430,14 @@ impl<'a> AstLowerer<'a> {
                 condition_uses,
                 |builder| {
                     let mut resolver_ref = resolver.borrow_mut();
+                    let mut functions_ref = functions.borrow_mut();
+
                     let mut nested = AstLowerer {
                         resolver: &mut *resolver_ref,
                         builder,
+                        functions: &mut *functions_ref,
                     };
+
                     *body_result.borrow_mut() = nested.lower_stmt(body_stmt.clone());
                 },
                 None::<fn(&mut CfgBuilder)>,
@@ -413,9 +465,11 @@ impl<'a> AstLowerer<'a> {
 
         let else_stmt = if_stmt.alt();
 
+        self.lower_functions_in_expr(&condition_expr, None, None)?;
         let condition_uses = self.resolver.collect_expr_uses(condition_expr);
 
         let resolver = RefCell::new(&mut *self.resolver);
+        let functions = RefCell::new(&mut *self.functions);
         let then_result = RefCell::new(Ok(()));
         let else_result = RefCell::new(Ok(()));
 
@@ -424,18 +478,26 @@ impl<'a> AstLowerer<'a> {
                 condition_uses,
                 |builder| {
                     let mut resolver_ref = resolver.borrow_mut();
+                    let mut functions_ref = functions.borrow_mut();
+
                     let mut nested = AstLowerer {
                         resolver: &mut *resolver_ref,
                         builder,
+                        functions: &mut *functions_ref,
                     };
+
                     *then_result.borrow_mut() = nested.lower_stmt(then_stmt.clone());
                 },
                 Some(|builder: &mut CfgBuilder| {
                     let mut resolver_ref = resolver.borrow_mut();
+                    let mut functions_ref = functions.borrow_mut();
+
                     let mut nested = AstLowerer {
                         resolver: &mut *resolver_ref,
                         builder,
+                        functions: &mut *functions_ref,
                     };
+
                     *else_result.borrow_mut() = nested.lower_stmt(else_stmt.clone());
                 }),
             );
@@ -444,10 +506,14 @@ impl<'a> AstLowerer<'a> {
                 condition_uses,
                 |builder| {
                     let mut resolver_ref = resolver.borrow_mut();
+                    let mut functions_ref = functions.borrow_mut();
+
                     let mut nested = AstLowerer {
                         resolver: &mut *resolver_ref,
                         builder,
+                        functions: &mut *functions_ref,
                     };
+
                     *then_result.borrow_mut() = nested.lower_stmt(then_stmt.clone());
                 },
                 None::<fn(&mut CfgBuilder)>,
@@ -468,13 +534,19 @@ impl<'a> AstLowerer<'a> {
             .cons()
             .ok_or("while statement missing body")?;
 
+        self.lower_functions_in_expr(&condition_expr, None, None)?;
         let condition_uses = self.resolver.collect_expr_uses(condition_expr);
 
         let resolver = &mut *self.resolver;
+        let functions = &mut *self.functions;
         let mut body_result: Result<(), String> = Ok(());
 
         self.builder.build_while(condition_uses, |builder| {
-            let mut nested = AstLowerer { resolver, builder };
+            let mut nested = AstLowerer {
+                resolver,
+                builder,
+                functions,
+            };
             body_result = nested.lower_stmt(body_stmt.clone());
         });
 
@@ -484,7 +556,13 @@ impl<'a> AstLowerer<'a> {
     fn lower_block_stmt(&mut self, block_stmt: &ast::BlockStmt) -> Result<(), String> {
         self.resolver.enter_scope();
 
-        for stmt in block_stmt.stmts() {
+        let statements: Vec<ast::Stmt> = block_stmt.stmts().collect();
+
+        for stmt in &statements {
+            self.predeclare_function_decl_in_stmt(stmt)?;
+        }
+
+        for stmt in statements {
             self.lower_stmt(stmt)?;
         }
 
@@ -511,6 +589,8 @@ impl<'a> AstLowerer<'a> {
             .ok_or_else(|| format!("assignment to unknown symbol '{}'", lhs_name))?;
 
         let rhs = assign.rhs().ok_or("assignment missing rhs")?;
+        self.lower_functions_in_expr(&rhs, None, None)?;
+
         let mut uses = self.resolver.collect_expr_uses(rhs);
 
         if is_compound_assignment(&assign) && !uses.contains(&defined_symbol) {
@@ -522,6 +602,160 @@ impl<'a> AstLowerer<'a> {
 
         Ok(true)
     }
+
+    fn predeclare_function_decl_in_stmt(&mut self, stmt: &ast::Stmt) -> Result<(), String> {
+        let ast::Stmt::Decl(decl) = stmt.clone() else {
+            return Ok(());
+        };
+
+        if decl.syntax().kind() != SyntaxKind::FN_DECL {
+            return Ok(());
+        }
+
+        let name = function_declared_name(decl.syntax())
+            .ok_or("function declaration missing name")?;
+
+        let span = Span::from_node(decl.syntax());
+
+        if !self.resolver.is_declared_in_current_scope(&name) {
+            self.resolver.declare(name, SymbolKind::Function, span)?;
+        }
+
+        Ok(())
+    }
+
+    fn lower_function_decl_in_stmt(&mut self, stmt: &ast::Stmt) -> Result<bool, String> {
+        let ast::Stmt::Decl(decl) = stmt.clone() else {
+            return Ok(false);
+        };
+
+        if decl.syntax().kind() != SyntaxKind::FN_DECL {
+            return Ok(false);
+        }
+
+        let name = function_declared_name(decl.syntax())
+            .ok_or("function declaration missing name")?;
+
+        let span = Span::from_node(decl.syntax());
+
+        let symbol_id = if let Some(symbol_id) = self.resolver.resolve(&name) {
+            symbol_id
+        } else {
+            self.resolver.declare(name.clone(), SymbolKind::Function, span)?
+        };
+
+        self.lower_function_like_node(
+            decl.syntax(),
+            Some(name),
+            Some(symbol_id),
+        )?;
+
+        Ok(true)
+    }
+
+    fn lower_functions_in_expr(
+        &mut self,
+        expr: &ast::Expr,
+        fallback_name: Option<String>,
+        fallback_symbol_id: Option<SymbolId>,
+    ) -> Result<(), String> {
+        if is_function_like_node(expr.syntax()) {
+            self.lower_function_like_node(expr.syntax(), fallback_name, fallback_symbol_id)
+        } else {
+            self.lower_direct_nested_functions_in_node(expr.syntax())
+        }
+    }
+
+    fn lower_direct_nested_functions_in_node(&mut self, node: &SyntaxNode) -> Result<(), String> {
+        let mut function_nodes = Vec::new();
+        collect_direct_function_like_nodes(node, &mut function_nodes);
+
+        for function_node in function_nodes {
+            self.lower_function_like_node(&function_node, None, None)?;
+        }
+
+        Ok(())
+    }
+
+    fn lower_function_like_node(
+        &mut self,
+        node: &SyntaxNode,
+        fallback_name: Option<String>,
+        fallback_symbol_id: Option<SymbolId>,
+    ) -> Result<(), String> {
+        let span = Span::from_node(node);
+
+        let declared_name = function_declared_name(node);
+        let metadata_name = fallback_name.or_else(|| declared_name.clone());
+
+        let metadata_symbol_id = if node.kind() == SyntaxKind::FN_DECL {
+            fallback_symbol_id.or_else(|| {
+                declared_name
+                    .as_ref()
+                    .and_then(|name| self.resolver.resolve(name))
+            })
+        } else {
+            fallback_symbol_id
+        };
+
+        let param_names = function_param_names(node);
+        let mut fn_builder = CfgBuilder::new();
+
+        self.resolver.enter_scope();
+
+        if node.kind() == SyntaxKind::FN_EXPR {
+            if let Some(inner_name) = declared_name {
+                if !self.resolver.is_declared_in_current_scope(&inner_name) {
+                    let _ = self.resolver.declare(inner_name, SymbolKind::Function, span)?;
+                }
+            }
+        }
+
+        let mut param_ids = Vec::new();
+        for param_name in param_names {
+            let param_id = self.resolver.declare(param_name, SymbolKind::Param, span)?;
+            param_ids.push(param_id);
+        }
+
+        {
+            let mut nested = AstLowerer {
+                resolver: self.resolver,
+                builder: &mut fn_builder,
+                functions: self.functions,
+            };
+
+            match function_body(node)? {
+                FunctionBody::Block(block_stmt) => {
+                    nested.lower_block_stmt(&block_stmt)?;
+                }
+                FunctionBody::Expr(expr) => {
+                    nested.lower_functions_in_expr(&expr, None, None)?;
+                    let uses = nested.resolver.collect_expr_uses(expr);
+                    nested.builder.build_return(span, uses);
+                }
+            }
+        }
+
+        self.resolver.exit_scope();
+
+        let cfg = fn_builder.finish();
+        let liveness = compute_liveness(&cfg);
+
+        self.functions.push(FunctionAnalysis {
+            name: metadata_name,
+            symbol_id: metadata_symbol_id,
+            span,
+            params: param_ids,
+            body: BodyAnalysis { cfg, liveness },
+        });
+
+        Ok(())
+    }
+}
+
+enum FunctionBody {
+    Block(ast::BlockStmt),
+    Expr(ast::Expr),
 }
 
 fn simple_decl_name(declarator: &ast::Declarator) -> Option<String> {
@@ -655,4 +889,125 @@ fn simple_expr_name(expr: &ast::Expr) -> Option<String> {
             }
             _ => None,
         })
+}
+
+fn is_function_like_node(node: &SyntaxNode) -> bool {
+    matches!(
+        node.kind(),
+        SyntaxKind::FN_DECL | SyntaxKind::FN_EXPR | SyntaxKind::ARROW_EXPR
+    )
+}
+
+fn collect_direct_function_like_nodes(node: &SyntaxNode, out: &mut Vec<SyntaxNode>) {
+    for child in node.children() {
+        if matches!(child.kind(), SyntaxKind::FN_EXPR | SyntaxKind::ARROW_EXPR) {
+            out.push(child);
+            continue;
+        }
+
+        collect_direct_function_like_nodes(&child, out);
+    }
+}
+
+fn function_declared_name(node: &SyntaxNode) -> Option<String> {
+    let params_start = node
+        .descendants()
+        .find(|n| n.kind() == SyntaxKind::PARAMETER_LIST)
+        .map(|n| n.text_range().start());
+
+    node.descendants_with_tokens().find_map(|elem| match elem {
+        NodeOrToken::Token(tok) if tok.kind() == SyntaxKind::IDENT => {
+            if let Some(start) = params_start {
+                if tok.text_range().start() < start {
+                    Some(tok.text().to_string())
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        }
+        _ => None,
+    })
+}
+
+fn function_param_names(node: &SyntaxNode) -> Vec<String> {
+    if let Some(param_list) = node.descendants().find(|n| n.kind() == SyntaxKind::PARAMETER_LIST) {
+        return param_list
+            .descendants_with_tokens()
+            .filter_map(|elem| match elem {
+                NodeOrToken::Token(tok) if tok.kind() == SyntaxKind::IDENT => {
+                    Some(tok.text().to_string())
+                }
+                _ => None,
+            })
+            .collect();
+    }
+
+    if node.kind() == SyntaxKind::ARROW_EXPR {
+        let mut params = Vec::new();
+
+        for elem in node.children_with_tokens() {
+            match elem {
+                NodeOrToken::Token(tok) => {
+                    if tok.text().as_str() == "=>" {
+                        break;
+                    }
+
+                    if tok.kind() == SyntaxKind::IDENT {
+                        params.push(tok.text().to_string());
+                    }
+                }
+                NodeOrToken::Node(_) => {}
+            }
+        }
+
+        return params;
+    }
+
+    Vec::new()
+}
+
+fn function_body(node: &SyntaxNode) -> Result<FunctionBody, String> {
+    match node.kind() {
+        SyntaxKind::FN_DECL | SyntaxKind::FN_EXPR => {
+            let block = node
+                .children()
+                .find_map(ast::BlockStmt::cast)
+                .or_else(|| node.descendants().find_map(ast::BlockStmt::cast))
+                .ok_or("function body block not found")?;
+
+            Ok(FunctionBody::Block(block))
+        }
+
+        SyntaxKind::ARROW_EXPR => {
+            let mut seen_arrow = false;
+
+            for elem in node.children_with_tokens() {
+                match elem {
+                    NodeOrToken::Token(tok) => {
+                        if tok.text().as_str() == "=>" {
+                            seen_arrow = true;
+                        }
+                    }
+
+                    NodeOrToken::Node(child) if seen_arrow => {
+                        if let Some(block) = ast::BlockStmt::cast(child.clone()) {
+                            return Ok(FunctionBody::Block(block));
+                        }
+
+                        if let Some(expr) = ast::Expr::cast(child) {
+                            return Ok(FunctionBody::Expr(expr));
+                        }
+                    }
+
+                    _ => {}
+                }
+            }
+
+            Err("arrow function body not found".to_string())
+        }
+
+        _ => Err("node is not a function-like node".to_string()),
+    }
 }
