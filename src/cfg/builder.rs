@@ -106,15 +106,16 @@ impl CfgBuilder {
         });
     }
 
-    pub fn build_return(&mut self, span: Span, uses: Vec<SymbolId>) {
+    pub fn build_return(&mut self, span: Span, uses: Vec<SymbolId>, has_value: bool) {
         self.push_statement(
-            StatementKind::Return,
+            StatementKind::Return { has_value },
             span,
             vec![],
             uses.clone(),
         );
 
         self.terminate_current(Terminator::Return {
+            has_value,
             value_uses: uses,
         });
 
@@ -490,7 +491,8 @@ fn remap_terminator(term: &Terminator, remap: &[BlockId]) -> Terminator {
             then_bb: remap[*then_bb],
             else_bb: remap[*else_bb],
         },
-        Terminator::Return { value_uses } => Terminator::Return {
+        Terminator::Return { has_value, value_uses } => Terminator::Return {
+            has_value: *has_value,
             value_uses: value_uses.clone(),
         },
         Terminator::Unset => Terminator::Unset,

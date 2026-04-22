@@ -102,6 +102,7 @@ impl<'a> AstLowerer<'a> {
 
             ast::Stmt::ReturnStmt(ret) => {
                 let span = Span::from_node(ret.syntax());
+                let has_value = ret.value().is_some();
 
                 let uses = if let Some(expr) = ret.value() {
                     self.lower_functions_in_expr(&expr, None, None)?;
@@ -110,7 +111,7 @@ impl<'a> AstLowerer<'a> {
                     Vec::new()
                 };
 
-                self.builder.build_return(span, uses);
+                self.builder.build_return(span, uses, has_value);
             }
 
             ast::Stmt::Decl(decl) => {
@@ -742,7 +743,7 @@ impl<'a> AstLowerer<'a> {
                 FunctionBody::Expr(expr) => {
                     nested.lower_functions_in_expr(&expr, None, None)?;
                     let uses = nested.resolver.collect_expr_uses(expr);
-                    nested.builder.build_return(span, uses);
+                    nested.builder.build_return(span, uses, true);
                 }
             }
         }

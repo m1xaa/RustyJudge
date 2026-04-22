@@ -118,7 +118,7 @@ pub fn compute_block_use_def(
                     }
                 }
             }
-            Terminator::Return { value_uses } => {
+            Terminator::Return { value_uses, .. } => {
                 for used in value_uses {
                     if !defs.contains(used) {
                         uses.insert(*used);
@@ -185,7 +185,7 @@ fn terminator_uses(terminator: &Terminator) -> HashSet<SymbolId> {
         Terminator::Branch { cond_uses, .. } => {
             uses.extend(cond_uses.iter().copied());
         }
-        Terminator::Return { value_uses } => {
+        Terminator::Return { value_uses, .. } => {
             uses.extend(value_uses.iter().copied());
         }
         Terminator::Goto(_) | Terminator::Unset | Terminator::Exit => {}

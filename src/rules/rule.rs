@@ -4,6 +4,7 @@ use rslint_parser::{parse_text, SyntaxNode, TextRange};
 
 use crate::cfg::semantic::SemanticModel;
 use crate::cfg::{build_semantic_model_from_root};
+use crate::cfg::basic_blocks::Span;
 use crate::diagnostics::Diagnostic;
 
 pub trait Rule: Send + Sync {
@@ -48,6 +49,17 @@ impl RuleContext {
             line + 1,
             col + 1,
             message.into(),
+        )
+    }
+
+    pub fn diagnostic_at_span(
+        &self,
+        span: Span,
+        message: impl Into<String>,
+    ) -> Diagnostic {
+        self.diagnostic_at(
+            TextRange::new(span.start.into(), span.end.into()),
+            message,
         )
     }
 

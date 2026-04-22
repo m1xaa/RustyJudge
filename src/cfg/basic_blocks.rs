@@ -65,7 +65,7 @@ pub enum StatementKind {
     Assign,
     Update,
     Expr,
-    Return,
+    Return { has_value: bool },
     Break,
     Continue,
     Empty,
@@ -80,6 +80,7 @@ pub enum Terminator {
         else_bb: BlockId,
     },
     Return {
+        has_value: bool,
         value_uses: Vec<SymbolId>,
     },
     Unset,

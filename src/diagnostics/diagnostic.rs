@@ -5,7 +5,7 @@ use serde::Serialize;
 pub struct Diagnostic {
     pub(crate) row: usize,
     pub(crate) col: usize,
-    message: String
+    pub(crate) message: String
 }
 
 impl Diagnostic {
