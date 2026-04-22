@@ -20,11 +20,11 @@ pub struct BasicBlock {
 }
 
 impl BasicBlock {
-    pub fn successors(&self) -> Vec<BlockId> {
+    pub fn successors(&self, exit: BlockId) -> Vec<BlockId> {
         match &self.terminator {
             Terminator::Goto(target) => vec![*target],
             Terminator::Branch { then_bb, else_bb, .. } => vec![*then_bb, *else_bb],
-            Terminator::Return { .. } => vec![],
+            Terminator::Return { .. } => vec![exit],
             Terminator::Unset => vec![],
             Terminator::Exit => vec![],
         }
@@ -40,12 +40,32 @@ pub struct StatementInfo {
     pub uses: Vec<SymbolId>,
 }
 
-#[derive(Debug, Clone)]
+impl StatementInfo {
+    pub fn has_initializer(&self) -> bool {
+        matches!(self.kind, StatementKind::VarDecl { has_initializer: true })
+    }
+
+    pub fn is_var_decl(&self) -> bool {
+        matches!(self.kind, StatementKind::VarDecl { .. })
+    }
+
+    pub fn is_write_like(&self) -> bool {
+        matches!(
+            self.kind,
+            StatementKind::Assign
+                | StatementKind::Update
+                | StatementKind::VarDecl { has_initializer: true }
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StatementKind {
-    VarDecl,
+    VarDecl { has_initializer: bool },
     Assign,
+    Update,
     Expr,
-    Return,
+    Return { has_value: bool },
     Break,
     Continue,
     Empty,
@@ -60,6 +80,7 @@ pub enum Terminator {
         else_bb: BlockId,
     },
     Return {
+        has_value: bool,
         value_uses: Vec<SymbolId>,
     },
     Unset,

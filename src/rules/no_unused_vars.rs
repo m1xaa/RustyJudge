@@ -1,5 +1,9 @@
-use std::collections::HashMap;
-use rslint_parser::{SyntaxKind, SyntaxToken};
+use std::collections::HashSet;
+
+use rslint_parser::TextRange;
+
+use crate::cfg::basic_blocks::{Cfg, Span, SymbolId, SymbolKind, Terminator};
+use crate::cfg::liveness::LivenessResult;
 use crate::diagnostics::Diagnostic;
 use crate::rules::{Rule, RuleContext};
 
@@ -11,80 +15,127 @@ impl Rule for NoUnusedVars {
     }
 
     fn check(&self, ctx: &RuleContext) -> Vec<Diagnostic> {
-        let mut diagnostics = Vec::new();
+        let Some(semantic) = ctx.semantic() else {
+            return Vec::new();
+        };
 
-        let mut declared: HashMap<String, SyntaxToken> = HashMap::new();
-        let mut used: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut used_symbols = HashSet::new();
 
-        for node in ctx.root.descendants() {
-            match node.kind() {
-                SyntaxKind::NAME => {
-                    let parent = match node.parent() {
-                        Some(p) => p,
-                        None => continue,
-                    };
+        collect_used_symbols_from_body(
+            semantic.script_cfg(),
+            semantic.script_liveness(),
+            &mut used_symbols,
+        );
 
-                    let name = node.text().to_string();
-
-                    let is_decl = parent
-                        .ancestors()
-                        .any(|a| matches!(
-                            a.kind(),
-                            SyntaxKind::VAR_DECL | SyntaxKind::PARAMETER_LIST
-                        ));
-
-                    if is_decl {
-                        declared.entry(name).or_insert_with(|| {
-                            node.first_token().unwrap()
-                        });
-                    }
-                }
-
-                SyntaxKind::NAME_REF => {
-                    let name = node.text().to_string();
-                    used.insert(name);
-                }
-
-                _ => {}
-            }
+        for function in &semantic.functions {
+            collect_used_symbols_from_body(
+                &function.body.cfg,
+                &function.body.liveness,
+                &mut used_symbols,
+            );
         }
 
-        for (name, token) in declared {
-            if !used.contains(&name) {
-                diagnostics.push(
-                    ctx.diagnostic_at(
-                        token.text_range(),
-                        format!("Unused variable '{}'", name),
-                    )
-                );
+        let mut diagnostics = Vec::new();
+
+        for symbol in &semantic.symbols.symbols {
+            if !should_check_symbol(symbol.kind) {
+                continue;
             }
+
+            if used_symbols.contains(&symbol.id) {
+                continue;
+            }
+
+            diagnostics.push(ctx.diagnostic_at(
+                span_to_text_range(symbol.decl_span),
+                unused_message(symbol.kind, &symbol.name),
+            ));
         }
 
         diagnostics
     }
 }
 
+fn collect_used_symbols_from_body(
+    cfg: &Cfg,
+    liveness: &LivenessResult,
+    used_symbols: &mut HashSet<SymbolId>,
+) {
+    for block in &cfg.blocks {
+        if !liveness.reachable.contains(&block.id) {
+            continue;
+        }
+
+        for stmt in &block.statements {
+            used_symbols.extend(stmt.uses.iter().copied());
+        }
+
+        match &block.terminator {
+            Terminator::Branch { cond_uses, .. } => {
+                used_symbols.extend(cond_uses.iter().copied());
+            }
+            Terminator::Return { value_uses, .. } => {
+                used_symbols.extend(value_uses.iter().copied());
+            }
+            Terminator::Goto(_) | Terminator::Unset | Terminator::Exit => {}
+        }
+    }
+}
+
+fn should_check_symbol(kind: SymbolKind) -> bool {
+    matches!(
+        kind,
+        SymbolKind::Var
+            | SymbolKind::Let
+            | SymbolKind::Const
+            | SymbolKind::Param
+            | SymbolKind::Function
+    )
+}
+
+fn unused_message(kind: SymbolKind, name: &str) -> String {
+    match kind {
+        SymbolKind::Param => format!("Unused parameter '{}'", name),
+        SymbolKind::Function => format!("Unused function '{}'", name),
+        SymbolKind::Var | SymbolKind::Let | SymbolKind::Const => {
+            format!("Unused variable '{}'", name)
+        }
+    }
+}
+
+fn span_to_text_range(span: Span) -> TextRange {
+    TextRange::new(span.start.into(), span.end.into())
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::rules::make_context;
     use super::*;
+    use crate::rules::make_context;
 
     #[test]
-    fn detects_unused_var() {
-        let ctx = make_context("var x = 5;", None);
-        let rule = NoUnusedVars;
+    fn detects_unused_variable() {
+        let ctx = make_context(
+            r#"
+            let x = 5;
+            "#,
+            None,
+        );
 
+        let rule = NoUnusedVars;
         let diagnostics = rule.check(&ctx);
 
         assert_eq!(diagnostics.len(), 1);
     }
 
     #[test]
-    fn does_not_flag_used_var() {
-        let ctx = make_context("
-            var x = 5;
+    fn does_not_flag_used_variable() {
+        let ctx = make_context(
+            r#"
+            let x = 5;
             console.log(x);
-        ", None);
+            "#,
+            None,
+        );
 
         let rule = NoUnusedVars;
         let diagnostics = rule.check(&ctx);
@@ -93,13 +144,63 @@ mod tests {
     }
 
     #[test]
-    fn detects_multiple_unused_vars() {
-        let ctx = make_context("
-            var a = 1;
-            var b = 2;
-            var c = 3;
-            console.log(a);
-        ", None);
+    fn detects_unused_parameter() {
+        let ctx = make_context(
+            r#"
+            function test(a, b) {
+                return a;
+            }
+            test(1,2);
+            "#,
+            None,
+        );
+
+        let rule = NoUnusedVars;
+        let diagnostics = rule.check(&ctx);
+
+        assert_eq!(diagnostics.len(), 1);
+        assert!(diagnostics[0].message.contains("Unused parameter 'b'"));
+    }
+
+    #[test]
+    fn handles_shadowing_correctly() {
+        let ctx = make_context(
+            r#"
+            let x = 1;
+
+            function test() {
+                let x = 2;
+                return x;
+            }
+
+            test();
+
+            console.log(x);
+            "#,
+            None,
+        );
+
+        let rule = NoUnusedVars;
+        let diagnostics = rule.check(&ctx);
+
+        assert!(diagnostics.is_empty());
+    }
+
+    #[test]
+    fn detects_unused_shadowed_variable() {
+        let ctx = make_context(
+            r#"
+            let x = 1;
+
+            function test() {
+                let x = 2;
+                return 0;
+            }
+
+            console.log(x);
+            "#,
+            None,
+        );
 
         let rule = NoUnusedVars;
         let diagnostics = rule.check(&ctx);
@@ -108,43 +209,59 @@ mod tests {
     }
 
     #[test]
-    fn parameters_count_as_declared() {
-        let ctx = make_context("
-            function test(a, b) {
-                console.log(a);
+    fn reachable_uses_count_but_unreachable_only_uses_do_not() {
+        let ctx = make_context(
+            r#"
+            function test() {
+                let x = 1;
+                return 0;
+                console.log(x);
             }
-        ", None);
+            "#,
+            None,
+        );
+
+        let rule = NoUnusedVars;
+        let diagnostics = rule.check(&ctx);
+
+        assert_eq!(diagnostics.len(), 2);
+    }
+
+    #[test]
+    fn does_not_flag_used_function() {
+        let ctx = make_context(
+            r#"
+            function test() {
+                return 1;
+            }
+
+            let x = test();
+            console.log(x);
+            "#,
+            None,
+        );
+
+        let rule = NoUnusedVars;
+        let diagnostics = rule.check(&ctx);
+
+        assert!(diagnostics.is_empty());
+    }
+
+    #[test]
+    fn flags_unused_function() {
+        let ctx = make_context(
+            r#"
+            function test() {
+                return 1;
+            }
+            "#,
+            None,
+        );
 
         let rule = NoUnusedVars;
         let diagnostics = rule.check(&ctx);
 
         assert_eq!(diagnostics.len(), 1);
-    }
-
-    #[test]
-    fn parameter_used_not_flagged() {
-        let ctx = make_context("
-            function test(a) {
-                return a;
-            }
-        ", None);
-
-        let rule = NoUnusedVars;
-        let diagnostics = rule.check(&ctx);
-
-        assert!(diagnostics.is_empty());
-    }
-
-    #[test]
-    fn usage_before_declaration_still_counts_as_used() {
-        let ctx = make_context("
-            console.log(x);
-            var x = 5;
-        ", None);
-
-        let rule = NoUnusedVars;
-        let diagnostics = rule.check(&ctx);
-
-        assert!(diagnostics.is_empty());
+        assert!(diagnostics[0].message.contains("Unused function 'test'"));
     }
 }
