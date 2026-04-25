@@ -166,4 +166,27 @@ mod tests {
 
         assert_eq!(diagnostics.len(), 1);
     }
+
+    #[test]
+    fn detects_unreachable_while_false_body() {
+        let ctx = make_context(
+            r#"
+        function test() {
+            while (false) {
+                let x = 1;
+            }
+
+            return 0;
+        }
+
+        test();
+        "#,
+            None,
+        );
+
+        let rule = NoUnreachableCode;
+        let diagnostics = rule.check(&ctx);
+
+        assert_eq!(diagnostics.len(), 1);
+    }
 }

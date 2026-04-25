@@ -315,4 +315,142 @@ mod tests {
 
         assert!(diagnostics.is_empty());
     }
+
+    #[test]
+    fn flags_while_true_without_exit() {
+        let ctx = make_context(
+            r#"
+        function test() {
+            let x = 0;
+
+            while (true) {
+                x = x + 1;
+            }
+        }
+
+        test();
+        "#,
+            None,
+        );
+
+        let rule = NoInfiniteLoops;
+        let diagnostics = rule.check(&ctx);
+
+        assert_eq!(diagnostics.len(), 1);
+    }
+
+    #[test]
+    fn does_not_flag_while_true_with_break() {
+        let ctx = make_context(
+            r#"
+        function test(x) {
+            while (true) {
+                if (x > 10) {
+                    break;
+                }
+
+                x = x + 1;
+            }
+
+            return x;
+        }
+
+        test(1);
+        "#,
+            None,
+        );
+
+        let rule = NoInfiniteLoops;
+        let diagnostics = rule.check(&ctx);
+
+        assert!(diagnostics.is_empty());
+    }
+
+    #[test]
+    fn while_false_body_is_unreachable_not_infinite() {
+        let ctx = make_context(
+            r#"
+        function test() {
+            while (false) {
+                console.log("never");
+            }
+
+            return 1;
+        }
+
+        test();
+        "#,
+            None,
+        );
+
+        let rule = NoInfiniteLoops;
+        let diagnostics = rule.check(&ctx);
+
+        assert!(diagnostics.is_empty());
+    }
+
+    #[test]
+    fn flags_while_one_without_exit() {
+        let ctx = make_context(
+            r#"
+        function test() {
+            while (1) {
+                console.log("loop");
+            }
+        }
+
+        test();
+        "#,
+            None,
+        );
+
+        let rule = NoInfiniteLoops;
+        let diagnostics = rule.check(&ctx);
+
+        assert_eq!(diagnostics.len(), 1);
+    }
+
+    #[test]
+    fn flags_while_non_empty_string_without_exit() {
+        let ctx = make_context(
+            r#"
+        function test() {
+            while ("yes") {
+                console.log("loop");
+            }
+        }
+
+        test();
+        "#,
+            None,
+        );
+
+        let rule = NoInfiniteLoops;
+        let diagnostics = rule.check(&ctx);
+
+        assert_eq!(diagnostics.len(), 1);
+    }
+
+    #[test]
+    fn does_not_flag_while_zero() {
+        let ctx = make_context(
+            r#"
+        function test() {
+            while (0) {
+                console.log("never");
+            }
+
+            return 1;
+        }
+
+        test();
+        "#,
+            None,
+        );
+
+        let rule = NoInfiniteLoops;
+        let diagnostics = rule.check(&ctx);
+
+        assert!(diagnostics.is_empty());
+    }
 }

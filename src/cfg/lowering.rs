@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 
 use crate::cfg::basic_blocks::{Span, SymbolId, SymbolKind};
-use crate::cfg::builder::CfgBuilder;
+use crate::cfg::builder::{CfgBuilder, LoopCondition};
 use crate::cfg::resolver::Resolver;
 use crate::cfg::semantic::{BodyAnalysis, FunctionAnalysis, SemanticModel};
 use crate::compute_liveness;
@@ -536,18 +536,26 @@ impl<'a> AstLowerer<'a> {
             .ok_or("while statement missing body")?;
 
         self.lower_functions_in_expr(&condition_expr, None, None)?;
-        let condition_uses = self.resolver.collect_expr_uses(condition_expr);
+
+        let condition = match constant_truthiness(&condition_expr) {
+            ConstTruthiness::AlwaysTrue => LoopCondition::AlwaysTrue,
+            ConstTruthiness::AlwaysFalse => LoopCondition::AlwaysFalse,
+            ConstTruthiness::Unknown => {
+                LoopCondition::Unknown(self.resolver.collect_expr_uses(condition_expr))
+            }
+        };
 
         let resolver = &mut *self.resolver;
         let functions = &mut *self.functions;
         let mut body_result: Result<(), String> = Ok(());
 
-        self.builder.build_while(condition_uses, |builder| {
+        self.builder.build_while(condition, |builder| {
             let mut nested = AstLowerer {
                 resolver,
                 builder,
                 functions,
             };
+
             body_result = nested.lower_stmt(body_stmt.clone());
         });
 
@@ -1022,4 +1030,166 @@ fn function_body(node: &SyntaxNode) -> Result<FunctionBody, String> {
 
         _ => Err("node is not a function-like node".to_string()),
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConstTruthiness {
+    AlwaysTrue,
+    AlwaysFalse,
+    Unknown,
+}
+
+fn constant_truthiness(expr: &ast::Expr) -> ConstTruthiness {
+    constant_truthiness_from_text(&expr.syntax().text().to_string())
+}
+
+fn constant_truthiness_from_text(raw: &str) -> ConstTruthiness {
+    let text = strip_outer_parens(raw.trim());
+
+    if text.is_empty() {
+        return ConstTruthiness::Unknown;
+    }
+
+    if let Some(rest) = text.strip_prefix('!') {
+        return negate_truthiness(constant_truthiness_from_text(rest.trim()));
+    }
+
+    match text {
+        "true" => return ConstTruthiness::AlwaysTrue,
+        "false" => return ConstTruthiness::AlwaysFalse,
+        "null" => return ConstTruthiness::AlwaysFalse,
+        "undefined" => return ConstTruthiness::AlwaysFalse,
+        "NaN" => return ConstTruthiness::AlwaysFalse,
+        _ => {}
+    }
+
+    if is_string_literal(text) {
+        return string_literal_truthiness(text);
+    }
+
+    if let Some(value) = parse_number_literal(text) {
+        if value == 0.0 || value.is_nan() {
+            return ConstTruthiness::AlwaysFalse;
+        }
+
+        return ConstTruthiness::AlwaysTrue;
+    }
+
+    ConstTruthiness::Unknown
+}
+
+fn negate_truthiness(value: ConstTruthiness) -> ConstTruthiness {
+    match value {
+        ConstTruthiness::AlwaysTrue => ConstTruthiness::AlwaysFalse,
+        ConstTruthiness::AlwaysFalse => ConstTruthiness::AlwaysTrue,
+        ConstTruthiness::Unknown => ConstTruthiness::Unknown,
+    }
+}
+
+fn strip_outer_parens(mut text: &str) -> &str {
+    loop {
+        let trimmed = text.trim();
+
+        if !(trimmed.starts_with('(') && trimmed.ends_with(')')) {
+            return trimmed;
+        }
+
+        let inner = &trimmed[1..trimmed.len() - 1];
+
+        if parens_are_balanced(inner) {
+            text = inner;
+        } else {
+            return trimmed;
+        }
+    }
+}
+
+fn parens_are_balanced(text: &str) -> bool {
+    let mut depth = 0usize;
+    let mut in_string: Option<char> = None;
+    let mut escaped = false;
+
+    for ch in text.chars() {
+        if let Some(quote) = in_string {
+            if escaped {
+                escaped = false;
+                continue;
+            }
+
+            if ch == '\\' {
+                escaped = true;
+                continue;
+            }
+
+            if ch == quote {
+                in_string = None;
+            }
+
+            continue;
+        }
+
+        match ch {
+            '"' | '\'' | '`' => in_string = Some(ch),
+            '(' => depth += 1,
+            ')' => {
+                if depth == 0 {
+                    return false;
+                }
+
+                depth -= 1;
+            }
+            _ => {}
+        }
+    }
+
+    depth == 0 && in_string.is_none()
+}
+
+fn is_string_literal(text: &str) -> bool {
+    if text.len() < 2 {
+        return false;
+    }
+
+    let first = text.chars().next().unwrap();
+    let last = text.chars().last().unwrap();
+
+    matches!((first, last), ('"', '"') | ('\'', '\'') | ('`', '`'))
+}
+
+fn string_literal_truthiness(text: &str) -> ConstTruthiness {
+    if text.len() < 2 {
+        return ConstTruthiness::Unknown;
+    }
+
+    let inner = &text[1..text.len() - 1];
+
+    if inner.is_empty() {
+        ConstTruthiness::AlwaysFalse
+    } else {
+        ConstTruthiness::AlwaysTrue
+    }
+}
+
+fn parse_number_literal(text: &str) -> Option<f64> {
+    let normalized = text.replace('_', "");
+
+    if normalized.starts_with("0x") || normalized.starts_with("0X") {
+        return i64::from_str_radix(&normalized[2..], 16)
+            .ok()
+            .map(|value| value as f64);
+    }
+
+    if normalized.starts_with("0b") || normalized.starts_with("0B") {
+        return i64::from_str_radix(&normalized[2..], 2)
+            .ok()
+            .map(|value| value as f64);
+    }
+
+    if normalized.starts_with("0o") || normalized.starts_with("0O") {
+        return i64::from_str_radix(&normalized[2..], 8)
+            .ok()
+            .map(|value| value as f64);
+    }
+
+    normalized.parse::<f64>().ok()
 }
