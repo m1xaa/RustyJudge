@@ -3,5 +3,5 @@
 test/**
 vscode-extension/server/*/rusty_judge_lsp*
 **/*.vsix
-**/dist
+**/dist/**
 benchmarks/corpus/**
