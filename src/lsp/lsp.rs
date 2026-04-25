@@ -114,4 +114,10 @@ impl LanguageServer for Backend {
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
         self.lint_and_publish(&params.text_document.uri).await;
     }
+
+    async fn did_close(&self, params: DidCloseTextDocumentParams) {
+        let uri = params.text_document.uri;
+        self.docs.write().await.remove(&uri);
+        self.client.publish_diagnostics(uri, Vec::new(), None).await;
+    }
 }

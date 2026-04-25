@@ -1,3 +1,5 @@
 /target
 **/node_modules
 test/**
+vscode-extension/server/*/rusty_judge_lsp*
+**/*.vsix
