@@ -14,6 +14,13 @@ struct LoopContext {
     continue_target: BlockId,
 }
 
+#[derive(Debug, Clone)]
+pub enum LoopCondition {
+    AlwaysTrue,
+    AlwaysFalse,
+    Unknown(Vec<SymbolId>),
+}
+
 impl CfgBuilder {
     pub fn new() -> Self {
         let entry = 0;
@@ -268,7 +275,7 @@ impl CfgBuilder {
 
     pub fn build_while<F>(
         &mut self,
-        condition_uses: Vec<SymbolId>,
+        condition: LoopCondition,
         body_builder: F,
     ) where
         F: FnOnce(&mut CfgBuilder),
@@ -282,11 +289,24 @@ impl CfgBuilder {
         }
 
         self.switch_to_block(condition_block);
-        self.terminate_current(Terminator::Branch {
-            cond_uses: condition_uses,
-            then_bb: body_block,
-            else_bb: exit_block,
-        });
+
+        match condition {
+            LoopCondition::AlwaysTrue => {
+                self.terminate_current(Terminator::Goto(body_block));
+            }
+
+            LoopCondition::AlwaysFalse => {
+                self.terminate_current(Terminator::Goto(exit_block));
+            }
+
+            LoopCondition::Unknown(condition_uses) => {
+                self.terminate_current(Terminator::Branch {
+                    cond_uses: condition_uses,
+                    then_bb: body_block,
+                    else_bb: exit_block,
+                });
+            }
+        }
 
         self.loop_stack.push(LoopContext {
             break_target: exit_block,
