@@ -16,7 +16,7 @@ tower-lsp = "0.20.0"
 sysinfo = "0.38.4"
 
 [[bench]]
-name = "rustyjudge_benchmark"
+name = "rusty_judge_benchmark"
+path = "benchmarks/rusty_judge/run_rusty_judge_benchmark.rs"
 harness = false
-
 
