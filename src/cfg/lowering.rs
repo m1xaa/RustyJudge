@@ -6,6 +6,7 @@ use crate::cfg::resolver::Resolver;
 use crate::cfg::semantic::{BodyAnalysis, FunctionAnalysis, SemanticModel};
 use crate::compute_liveness;
 use rslint_parser::{ast, AstNode, NodeOrToken, SyntaxKind, SyntaxNode};
+use rslint_parser::ast::TryStmt;
 
 pub fn build_semantic_model_from_root(root: SyntaxNode) -> Result<SemanticModel, String> {
     let mut resolver = Resolver::new();
@@ -61,6 +62,13 @@ impl<'a> AstLowerer<'a> {
                 continue;
             }
 
+            // if child.kind() == SyntaxKind::TRY_STMT {
+            //     let try_stmt = ast::TryStmt::cast(child.clone())
+            //         .ok_or("failed to cast TRY_STMT")?;
+            //     self.lower_try_stmt(&try_stmt);
+            //     continue;
+            // }
+
             if let Some(stmt) = ast::Stmt::cast(child.clone()) {
                 self.lower_stmt(stmt)?;
             }
@@ -75,6 +83,12 @@ impl<'a> AstLowerer<'a> {
                 .ok_or("failed to cast FOR_OF_STMT")?;
             return self.lower_for_of_stmt(&for_of_stmt);
         }
+
+        // if stmt.syntax().kind() == SyntaxKind::TRY_STMT {
+        //     let try_stmt = ast::TryStmt::cast(stmt.syntax().clone())
+        //         .ok_or("failed to cast TRY_STMT")?;
+        //     return self.lower_try_stmt(&try_stmt);
+        // }
 
         if self.lower_function_decl_in_stmt(&stmt)? {
             return Ok(());
@@ -148,6 +162,10 @@ impl<'a> AstLowerer<'a> {
 
             ast::Stmt::ForInStmt(for_in_stmt) => {
                 self.lower_for_in_stmt(&for_in_stmt)?;
+            }
+
+            ast::Stmt::TryStmt(try_stmt) => {
+                self.lower_try_stmt(&try_stmt)?;
             }
 
             _ => {}
@@ -278,6 +296,62 @@ impl<'a> AstLowerer<'a> {
         }
 
         Err("unsupported for-each left side".to_string())
+    }
+
+    fn lower_try_stmt(&mut self, try_stmt: &ast::TryStmt) -> Result<(), String> {
+        let Some((try_block, catch_block)) = try_catch_blocks(try_stmt) else {
+            return Ok(());
+        };
+
+        let catch_param = catch_param(try_stmt);
+
+        let resolver = RefCell::new(&mut *self.resolver);
+        let functions = RefCell::new(&mut *self.functions);
+        let try_result = RefCell::new(Ok(()));
+        let catch_result = RefCell::new(Ok(()));
+
+        self.builder.build_try_catch(
+            |builder| {
+                let mut resolver_ref = resolver.borrow_mut();
+                let mut functions_ref = functions.borrow_mut();
+
+                let mut nested = AstLowerer {
+                    resolver: &mut *resolver_ref,
+                    builder,
+                    functions: &mut *functions_ref,
+                };
+
+                *try_result.borrow_mut() = nested.lower_block_stmt(&try_block);
+            },
+            |builder| {
+                let mut resolver_ref = resolver.borrow_mut();
+                let mut functions_ref = functions.borrow_mut();
+
+                let mut nested = AstLowerer {
+                    resolver: &mut *resolver_ref,
+                    builder,
+                    functions: &mut *functions_ref,
+                };
+
+                nested.resolver.enter_scope();
+
+                let result = (|| {
+                    if let Some((name, span)) = catch_param.clone() {
+                        if !nested.resolver.is_declared_in_current_scope(&name) {
+                            nested.resolver.declare(String::from(name), SymbolKind::Param, span)?;
+                        }
+                    }
+
+                    nested.lower_block_stmt(&catch_block)
+                })();
+
+                nested.resolver.exit_scope();
+                *catch_result.borrow_mut() = result;
+            },
+        );
+
+        try_result.into_inner()?;
+        catch_result.into_inner()
     }
 
     fn try_lower_update_expr(
@@ -1192,4 +1266,71 @@ fn parse_number_literal(text: &str) -> Option<f64> {
     }
 
     normalized.parse::<f64>().ok()
+}
+
+fn try_catch_blocks(try_stmt: &ast::TryStmt) -> Option<(ast::BlockStmt, ast::BlockStmt)> {
+    let try_block = try_stmt
+        .syntax()
+        .children()
+        .find_map(ast::BlockStmt::cast)?;
+
+    let catch_clause = try_stmt
+        .syntax()
+        .children()
+        .find(|node| node.kind() == SyntaxKind::CATCH_CLAUSE)?;
+
+    let catch_block = catch_clause
+        .children()
+        .find_map(ast::BlockStmt::cast)?;
+
+    Some((try_block, catch_block))
+}
+
+fn catch_param(try_stmt: &ast::TryStmt) -> Option<(String, Span)> {
+    let catch_clause = try_stmt
+        .syntax()
+        .children()
+        .find(|node| node.kind() == SyntaxKind::CATCH_CLAUSE)?;
+
+    for elem in catch_clause.descendants_with_tokens() {
+        match elem {
+            NodeOrToken::Node(node) => {
+                if node.kind() == SyntaxKind::BLOCK_STMT {
+                    break;
+                }
+            }
+
+            NodeOrToken::Token(tok) => {
+                if tok.kind() == SyntaxKind::IDENT {
+                    let range = tok.text_range();
+
+                    return Some((
+                        tok.text().to_string(),
+                        Span {
+                            start: range.start().into(),
+                            end: range.end().into(),
+                        },
+                    ));
+                }
+            }
+        }
+    }
+
+    None
+}
+
+fn first_ident_in_node(node: &SyntaxNode) -> Option<(String, Span)> {
+    node.descendants_with_tokens().find_map(|elem| match elem {
+        NodeOrToken::Token(tok) if tok.kind() == SyntaxKind::IDENT => {
+            let range = tok.text_range();
+            Some((
+                tok.text().to_string(),
+                Span {
+                    start: range.start().into(),
+                    end: range.end().into(),
+                },
+            ))
+        }
+        _ => None,
+    })
 }

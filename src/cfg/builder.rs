@@ -6,6 +6,7 @@ pub struct CfgBuilder {
     current: BlockId,
     next_statement_id: StatementId,
     loop_stack: Vec<LoopContext>,
+    current_exception_target: Option<BlockId>,
 }
 
 #[derive(Debug, Clone)]
@@ -32,12 +33,14 @@ impl CfgBuilder {
                 statements: vec![],
                 terminator: Terminator::Unset,
                 predecessors: vec![],
+                exception_successors: vec![],
             },
             BasicBlock {
                 id: exit,
                 statements: vec![],
                 terminator: Terminator::Exit,
                 predecessors: vec![],
+                exception_successors: vec![],
             },
         ];
 
@@ -46,6 +49,7 @@ impl CfgBuilder {
             current: entry,
             next_statement_id: 0,
             loop_stack: vec![],
+            current_exception_target: None
         }
     }
 
@@ -56,6 +60,7 @@ impl CfgBuilder {
             statements: vec![],
             terminator: Terminator::Unset,
             predecessors: vec![],
+            exception_successors: vec![],
         });
         id
     }
@@ -63,6 +68,20 @@ impl CfgBuilder {
     fn add_edge(&mut self, from: BlockId, to: BlockId) {
         if !self.cfg.blocks[to].predecessors.contains(&from) {
             self.cfg.blocks[to].predecessors.push(from);
+        }
+    }
+
+    fn add_exception_edge(&mut self, from: BlockId, to: BlockId) {
+        if !self.cfg.blocks[from].exception_successors.contains(&to) {
+            self.cfg.blocks[from].exception_successors.push(to);
+        }
+
+        self.add_edge(from, to);
+    }
+
+    fn register_possible_exception(&mut self) {
+        if let Some(catch_target) = self.current_exception_target {
+            self.add_exception_edge(self.current, catch_target);
         }
     }
 
@@ -77,6 +96,7 @@ impl CfgBuilder {
         match &term {
             Terminator::Goto(to) => self.add_edge(from, *to),
             Terminator::Branch { then_bb, else_bb, .. } => {
+                self.register_possible_exception();
                 self.add_edge(from, *then_bb);
                 self.add_edge(from, *else_bb);
             }
@@ -111,6 +131,8 @@ impl CfgBuilder {
             defines,
             uses,
         });
+
+        self.register_possible_exception();
     }
 
     pub fn build_return(&mut self, span: Span, uses: Vec<SymbolId>, has_value: bool) {
@@ -156,6 +178,7 @@ impl CfgBuilder {
 
         self.next_statement_id += 1;
         self.cfg.blocks[self.current].statements.push(stmt);
+        self.register_possible_exception();
     }
 
     pub fn build_assignment(
@@ -183,6 +206,8 @@ impl CfgBuilder {
 
         self.next_statement_id += 1;
         self.cfg.blocks[self.current].statements.push(stmt);
+
+        self.register_possible_exception();
     }
 
     pub fn build_if<F, G>(
@@ -271,6 +296,57 @@ impl CfgBuilder {
 
         let next_block = self.new_block();
         self.switch_to_block(next_block);
+    }
+
+    pub fn build_try_catch<F, G>(
+        &mut self,
+        try_builder: F,
+        catch_builder: G,
+    )
+    where
+        F: FnOnce(&mut CfgBuilder),
+        G: FnOnce(&mut CfgBuilder),
+    {
+        let try_block = self.new_block();
+        let catch_block = self.new_block();
+
+        if self.current_block_is_open() {
+            self.terminate_current(Terminator::Goto(try_block));
+        }
+
+        let old_exception_target = self.current_exception_target;
+        self.current_exception_target = Some(catch_block);
+
+        self.switch_to_block(try_block);
+        try_builder(self);
+        let try_end = self.current;
+        let try_open = self.current_block_is_open();
+
+        self.current_exception_target = old_exception_target;
+
+        self.switch_to_block(catch_block);
+        catch_builder(self);
+        let catch_end = self.current;
+        let catch_open = self.current_block_is_open();
+
+        if try_open || catch_open {
+            let join_block = self.new_block();
+
+            if try_open {
+                self.switch_to_block(try_end);
+                self.terminate_current(Terminator::Goto(join_block));
+            }
+
+            if catch_open {
+                self.switch_to_block(catch_end);
+                self.terminate_current(Terminator::Goto(join_block));
+            }
+
+            self.switch_to_block(join_block);
+        } else {
+            let dead_continuation = self.new_block();
+            self.switch_to_block(dead_continuation);
+        }
     }
 
     pub fn build_while<F>(
@@ -464,12 +540,33 @@ fn prune_unreachable_empty_blocks(cfg: Cfg) -> Cfg {
                 statements: block.statements.clone(),
                 terminator: block.terminator.clone(),
                 predecessors: Vec::new(),
+                exception_successors: Vec::new()
             });
         }
     }
 
     for block in &mut new_blocks {
         block.terminator = remap_terminator(&block.terminator, &remap);
+    }
+
+    for old_block in &cfg.blocks {
+        if !keep[old_block.id] {
+            continue;
+        }
+
+        let new_id = remap[old_block.id];
+
+        new_blocks[new_id].exception_successors = old_block
+            .exception_successors
+            .iter()
+            .filter_map(|&target| {
+                if keep[target] {
+                    Some(remap[target])
+                } else {
+                    None
+                }
+            })
+            .collect();
     }
 
     for old_block in &cfg.blocks {
