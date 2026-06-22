@@ -225,11 +225,15 @@ cargo bench
 
 ```text
 rustyjudge/
-├── src/
-│   ├── cfg/            # Control flow graph
-│   ├── cfg_rules/      # CFG-based rules
-│   └── ...
-├── vscode-extension/   # VSCode extension
-├── benchmarks/         # Performance benchmarks
-└── ...
++-- src/
+|   +-- cfg/            # Control flow graph
+|   +-- cfg_rules/      # CFG-based rules
+|   +-- ...
++-- vscode-extension/   # VSCode extension
++-- benchmarks/         # Performance benchmarks
++-- ...
 ```
+
+## License
+
+This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
